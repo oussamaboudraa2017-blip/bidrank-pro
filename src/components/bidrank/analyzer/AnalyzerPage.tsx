@@ -346,7 +346,7 @@ function exportToPdf(r: ApiResult) {
 <h2>Bid/No-Bid Recommendation</h2>
 <div class="verdict" style="border-color:${r.bidRecommendation.verdict === "BID" ? "#16a34a" : r.bidRecommendation.verdict === "NO-BID" ? "#dc2626" : "#f59e0b"}">
   <span class="verdict-badge" style="background:${r.bidRecommendation.verdict === "BID" ? "#16a34a" : r.bidRecommendation.verdict === "NO-BID" ? "#dc2626" : "#f59e0b"}">${r.bidRecommendation.verdict}</span>
-  <p style="font-size:13px;color:#64748b">Confidence: ${Math.round(r.bidRecommendation.confidence * 100)}%</p>
+  <p style="font-size:13px;color:#64748b">Confidence: ${Math.min(100, Math.round(r.bidRecommendation.confidence))}%</p>
   <p style="margin-top:8px;font-size:13px">${r.bidRecommendation.reasoning}</p>
 </div>
 ${r.bidRecommendation.actionItems?.length ? `<h3 style="margin-top:12px;font-size:14px;font-weight:600">Required Actions</h3><ul class="rec-list">${r.bidRecommendation.actionItems.map((a: string) => `<li>${a}</li>`).join("")}</ul>` : ""}
