@@ -381,10 +381,34 @@ function validateAndFix(
     }
   }
 
+  // ── Ensure FAR compliance exists FIRST ───────────────────────
+  // Must be built before score calculation so missingFARs is accurate.
+  if (!parsed.far_compliance) {
+    parsed.far_compliance = buildDefaultFARCompliance(rfpText)
+  }
+
+  // ── Score cross-validation: recalculate from findings ──────────
+  // The prompt tells the AI to start at 100 and deduct per finding, but
+  // the AI frequently ignores its own formula.  We recalculate here and
+  // use the LOWER of AI score vs calculated score so the result is
+  // never more optimistic than the evidence warrants.
+  const missingFARs = Object.values(parsed.far_compliance).filter(
+    (c) => c.status === 'MISSING'
+  ).length
+  const calculatedScore = Math.max(
+    5,
+    100
+      - parsed.critical_findings.length * 15
+      - parsed.high_findings.length * 8
+      - parsed.medium_findings.length * 3
+      - parsed.low_findings.length * 1
+      - missingFARs * 10,
+  )
+
   // Fix metadata
   if (!parsed.metadata) {
     parsed.metadata = {
-      compliance_score: 50,
+      compliance_score: calculatedScore,
       risk_level: 'MEDIUM',
       pages_analyzed: Math.ceil(rfpText.length / 3000),
       total_pages: Math.ceil(rfpText.length / 3000),
@@ -401,8 +425,9 @@ function validateAndFix(
     if (!parsed.metadata.total_pages) {
       parsed.metadata.total_pages = parsed.metadata.pages_analyzed
     }
-    // Clamp compliance score
-    parsed.metadata.compliance_score = Math.max(5, Math.min(100, Math.round(parsed.metadata.compliance_score || 50)))
+    // Use the LOWER of AI score vs formula-derived score
+    const aiScore = Math.max(5, Math.min(100, Math.round(parsed.metadata.compliance_score || 50)))
+    parsed.metadata.compliance_score = Math.min(aiScore, calculatedScore)
   }
 
   // Fix agency if null but detectable
@@ -420,19 +445,27 @@ function validateAndFix(
     parsed.metadata.naics_code = detectNAICS(rfpText)
   }
 
-  // Fix risk level based on findings
-  if (parsed.critical_findings.length > 0) {
-    parsed.metadata.risk_level = 'HIGH'
-  } else if (parsed.high_findings.length > 0) {
-    parsed.metadata.risk_level = 'MEDIUM'
-  } else {
-    parsed.metadata.risk_level = 'LOW'
-  }
+  // Fix risk level: derive from BOTH findings AND score for consistency
+  // A high score with CRITICAL findings, or a low score with no findings,
+  // both indicate a mismatch — risk level should reflect the worse signal.
+  const score = parsed.metadata.compliance_score
+  const hasCriticals = parsed.critical_findings.length > 0
+  const hasHighs = parsed.high_findings.length > 0
 
-  // Ensure FAR compliance exists
-  if (!parsed.far_compliance) {
-    parsed.far_compliance = buildDefaultFARCompliance(rfpText)
-  }
+  let riskFromFindings: 'HIGH' | 'MEDIUM' | 'LOW'
+  if (hasCriticals) riskFromFindings = 'HIGH'
+  else if (hasHighs) riskFromFindings = 'MEDIUM'
+  else riskFromFindings = 'LOW'
+
+  let riskFromScore: 'HIGH' | 'MEDIUM' | 'LOW'
+  if (score < 40) riskFromScore = 'HIGH'
+  else if (score < 65) riskFromScore = 'MEDIUM'
+  else riskFromScore = 'LOW'
+
+  // Take the MORE conservative (worse) risk level
+  const riskOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
+  parsed.metadata.risk_level =
+    riskOrder[riskFromFindings] <= riskOrder[riskFromScore] ? riskFromFindings : riskFromScore
 
   // Enforce forbidden language in all findings
   enforceLanguageRules(parsed)
