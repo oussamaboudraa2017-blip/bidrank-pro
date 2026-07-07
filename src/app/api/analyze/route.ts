@@ -19,10 +19,12 @@ export async function POST(request: NextRequest) {
 
     // ── Get user plan from DB ───────────────────────────────────────────────
     let plan = 'free'
+    let isAdmin = false
     try {
       const user = await db.user.findUnique({ where: { id: userId } })
       if (user) {
         plan = user.plan
+        isAdmin = user.role === 'admin'
       } else {
         // Auto-create user record on first analysis (shouldn't happen with Better Auth)
         await db.user.create({
@@ -40,25 +42,32 @@ export async function POST(request: NextRequest) {
       console.warn('[/api/analyze] DB unavailable, using free tier:', dbErr)
     }
 
+    // Admin users bypass all rate limits
+    if (isAdmin) {
+      plan = 'enterprise'
+    }
+
     const limits = getPlanLimits(plan)
 
     // ── Rate limit check (DB-backed) ────────────────────────────────────────
-    try {
-      const userRecord = await db.user.findUnique({
-        where: { id: userId },
-        select: { analysesThisMonth: true, trialEndsAt: true },
-      })
-      if (userRecord && userRecord.analysesThisMonth >= limits.maxAnalysesPerMonth) {
-        return NextResponse.json(
-          {
-            error: `Monthly analysis limit reached (${limits.maxAnalysesPerMonth}/${limits.maxAnalysesPerMonth}). Please upgrade your plan for more analyses.`,
-            plan,
-          },
-          { status: 429 }
-        )
+    if (!isAdmin) {
+      try {
+        const userRecord = await db.user.findUnique({
+          where: { id: userId },
+          select: { analysesThisMonth: true, trialEndsAt: true },
+        })
+        if (userRecord && userRecord.analysesThisMonth >= limits.maxAnalysesPerMonth) {
+          return NextResponse.json(
+            {
+              error: `Monthly analysis limit reached (${limits.maxAnalysesPerMonth}/${limits.maxAnalysesPerMonth}). Please upgrade your plan for more analyses.`,
+              plan,
+            },
+            { status: 429 }
+          )
+        }
+      } catch {
+        // Skip rate limit if DB is unavailable
       }
-    } catch {
-      // Skip rate limit if DB is unavailable
     }
 
     // ── Parse body (accept FormData for file upload + JSON for text) ────────
