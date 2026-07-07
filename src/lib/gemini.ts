@@ -273,11 +273,13 @@ export async function analyzeRFPFree(rfpText: string): Promise<V2AnalysisResult>
     : rfpText
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({
+  // Pass thinkingConfig via the generationConfig field supported at runtime
+  // but not yet reflected in the SDK's TypeScript types.
+  const modelConfig = {
     model: 'gemini-2.5-flash',
-    // @ts-expect-error — thinkingConfig is a valid runtime field not yet in types
-    generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
-  })
+    generationConfig: { thinkingConfig: { thinkingBudget: 0 } } as Record<string, unknown>,
+  }
+  const model = genAI.getGenerativeModel(modelConfig)
 
   const prompt = `${V2_SYSTEM_PROMPT}
 
@@ -286,20 +288,36 @@ ${truncated}
 
 Return ONLY valid JSON, no markdown, no explanation.`
 
-  // 45-second hard timeout so we always return before Vercel's 60s limit
+  // 45-second hard timeout — always returns before Vercel's 60s function limit.
+  // The timer is cleared in `finally` so it never leaks across requests.
   const timeoutMs = 45_000
-  const result = await Promise.race([
-    model.generateContent(prompt),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Analysis timed out. The document may be too complex — please try a shorter excerpt or upgrade for priority processing.')), timeoutMs)
-    ),
-  ])
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error('Analysis timed out. The document may be too complex — please try a shorter excerpt or upgrade for priority processing.')),
+      timeoutMs,
+    )
+  })
 
-  const response = (result as Awaited<ReturnType<typeof model.generateContent>>).response.text()
+  let response: string
+  try {
+    const result = await Promise.race([model.generateContent(prompt), timeoutPromise])
+    response = result.response.text()
+  } finally {
+    clearTimeout(timeoutId)
+  }
+
   const processingTime = ((Date.now() - startTime) / 1000).toFixed(0) + 's'
 
+  // Safe JSON parse — map malformed model output to a structured 422 error
+  // rather than a generic 500 that loses the failure reason.
   const jsonStr = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-  const parsed = JSON.parse(jsonStr) as V2AnalysisResult
+  let parsed: V2AnalysisResult
+  try {
+    parsed = JSON.parse(jsonStr) as V2AnalysisResult
+  } catch {
+    throw new Error('Unable to parse analysis output. The AI returned an unexpected format — please try again.')
+  }
 
   const validated = validateAndFix(parsed, truncated, processingTime)
   runQualityGates(validated, truncated)
@@ -337,7 +355,7 @@ function preFlightCheck(text: string): string | null {
    VALIDATION & FIXING
    ═══════════════════════════════════════════════════════════════════ */
 
-const SEVERITY_INDICATORS: Record<string, string> = {
+const SEVERITY_INDICATORS: Record<SeverityLevel, SeverityIndicator> = {
   CRITICAL: '🔴',
   HIGH: '🟠',
   MEDIUM: '🟡',
