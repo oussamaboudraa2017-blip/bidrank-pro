@@ -132,99 +132,85 @@ export default function FreeToolPage() {
     [setValidFile]
   );
 
-  // ── Analysis flow — calls real v2.0 API ─────────────────────
+  const analysisDoneRef = useRef(false);
+
   const startAnalysis = useCallback(async () => {
-    if (!file) return;
-    trackEvent("free_tool_upload_success", { category: "product" });
+    if (!file || analysisDoneRef.current) return;
+    analysisDoneRef.current = true;
+
+    try { trackEvent("free_tool_upload_success", { category: "product" }); } catch {}
 
     // Phase 1: Upload animation
     setState("uploading");
     setUploadProgress(0);
     setApiError(null);
+    setAnimatedScore(0);
 
     const uploadInterval = setInterval(() => {
       setUploadProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(uploadInterval);
-          return 90;
-        }
+        if (prev >= 90) { clearInterval(uploadInterval); return 90; }
         return prev + Math.random() * 30 + 10;
       });
     }, 200);
 
+    const processingTimer = setTimeout(() => {
+      clearInterval(uploadInterval);
+      setUploadProgress(100);
+      setState("processing");
+      setCurrentStep(0);
+      setProgress(0);
+      const stepInterval = setInterval(() => {
+        setCurrentStep((prev) => {
+          if (prev >= processingSteps.length - 1) { clearInterval(stepInterval); return prev; }
+          setProgress(((prev + 1) / processingSteps.length) * 100);
+          return prev + 1;
+        });
+      }, 3000);
+    }, 1200);
+
     try {
-      // Build form data
       const formData = new FormData();
       formData.append("file", file);
-
-      // Transition to processing
-      setTimeout(() => {
-        clearInterval(uploadInterval);
-        setUploadProgress(100);
-        setState("processing");
-        setCurrentStep(0);
-        setProgress(0);
-
-        // Animate processing steps
-        const stepInterval = setInterval(() => {
-          setCurrentStep((prev) => {
-            if (prev >= processingSteps.length - 1) {
-              clearInterval(stepInterval);
-              return prev;
-            }
-            setProgress(((prev + 1) / processingSteps.length) * 100);
-            return prev + 1;
-          });
-        }, 3000);
-      }, 1200);
-
-      // Call real API
-      const res = await fetch("/api/free-analyze", {
-        method: "POST",
-        body: formData,
-      });
-
-      // If still in uploading state, move to processing
-      if (state === "uploading") {
-        setState("processing");
-      }
-
+      const res = await fetch("/api/free-analyze", { method: "POST", body: formData });
       const data = await res.json();
 
+      clearTimeout(processingTimer);
+
       if (!res.ok) {
-        // Rate limit or error
         setApiError(data.error || "Analysis failed. Please try again.");
         setState("error");
-        trackEvent("free_tool_analysis_error", { category: "product", metadata: { error: data.error?.substring(0, 100) } });
+        try { trackEvent("free_tool_analysis_error", { category: "product", metadata: { error: data.error?.substring(0, 100) } }); } catch {}
         return;
       }
 
-      // Success — show results
       setResult(data);
-      trackEvent("free_tool_analysis_complete", { category: "product", metadata: { score: data.metadata?.compliance_score } });
-
       setProgress(100);
+
+      const targetScore = data.metadata?.compliance_score || 0;
+      let current = 0;
+      const scoreInterval = setInterval(() => {
+        current += 2;
+        if (current >= targetScore) { current = targetScore; clearInterval(scoreInterval); }
+        setAnimatedScore(current);
+      }, 20);
+
+      setState("results");
+
       setTimeout(() => {
-        setState("results");
-        const targetScore = data.metadata?.compliance_score || 0;
-        let current = 0;
-        const scoreInterval = setInterval(() => {
-          current += 2;
-          if (current >= targetScore) {
-            current = targetScore;
-            clearInterval(scoreInterval);
-          }
-          setAnimatedScore(current);
-        }, 20);
-      }, 600);
+        document.getElementById("results-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+
+      try { trackEvent("free_tool_analysis_complete", { category: "product", metadata: { score: data.metadata?.compliance_score } }); } catch {}
     } catch (err) {
+      clearTimeout(processingTimer);
       setApiError("Network error. Please check your connection and try again.");
       setState("error");
-      trackEvent("free_tool_analysis_error", { category: "product", metadata: { error: "network_error" } });
+      try { trackEvent("free_tool_analysis_error", { category: "product", metadata: { error: "network_error" } }); } catch {}
     }
-  }, [file, state]);
+  }, [file]);
 
   const resetTool = () => {
+    analysisDoneRef.current = false;
     setState("upload");
     setFile(null);
     setFileError(null);
@@ -618,7 +604,7 @@ I.1 The following FAR clauses apply to this contract:
 
           {/* ── RESULTS STATE ────────────────────────────────── */}
           {state === "results" && result && (
-            <div className="space-y-8">
+            <div id="results-section" className="space-y-8">
               {/* Score + Risk Badge */}
               <Card className="bg-br-surface border border-br-border shadow-br-sm rounded-xl overflow-hidden">
                 <CardContent className="p-6 md:p-8">
