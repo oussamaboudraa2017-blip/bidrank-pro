@@ -269,6 +269,112 @@ function HeatmapDot({ level }: { level: string }) {
   );
 }
 
+/* ── Helper: Export analysis to PDF ───────── */
+function exportToPdf(r: ApiResult) {
+  const overallCompliance = r.complianceCategories.length
+    ? Math.round(r.complianceCategories.reduce((s, c) => s + c.score, 0) / r.complianceCategories.length)
+    : 0;
+
+  const riskColor = (level: string) =>
+    level === "Critical" ? "#dc2626" : level === "High" ? "#f59e0b" : level === "Medium" ? "#f59e0b" : "#16a34a";
+
+  const statusIcon = (s: string) =>
+    s === "pass" ? "\u2705" : s === "warn" ? "\u26A0\uFE0F" : "\u274C";
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>BidRank RFP Analysis Report</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1e293b;padding:40px;max-width:800px;margin:0 auto;font-size:14px;line-height:1.6}
+  h1{font-size:24px;font-weight:700;color:#1e3a5f;margin-bottom:4px}
+  .subtitle{color:#64748b;font-size:13px;margin-bottom:24px}
+  .disclaimer{background:#fefce8;border:1px solid #fbbf24;border-radius:8px;padding:12px;font-size:11px;color:#92400e;margin-bottom:24px}
+  h2{font-size:16px;font-weight:600;color:#1e3a5f;margin:24px 0 12px;padding-bottom:6px;border-bottom:2px solid #1e3a5f}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+  .metric{background:#f8fafc;border-radius:8px;padding:12px;text-align:center}
+  .metric-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px}
+  .metric-value{font-size:15px;font-weight:600;color:#1e293b;margin-top:2px}
+  .score-row{display:flex;gap:16px;align-items:center;margin:16px 0}
+  .score-big{font-size:48px;font-weight:700;color:#1e3a5f}
+  .breakdown{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1}
+  .breakdown-item{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #f1f5f9}
+  .breakdown-item span:last-child{font-weight:600}
+  .verdict{padding:16px;border-radius:8px;border:2px solid #1e3a5f;margin:16px 0}
+  .verdict-badge{display:inline-block;padding:4px 12px;border-radius:20px;color:#fff;font-weight:700;font-size:13px;margin-bottom:8px}
+  .checklist{width:100%;border-collapse:collapse;margin:8px 0}
+  .checklist td,.checklist th{padding:8px 12px;text-align:left;border-bottom:1px solid #e2e8f0;font-size:13px}
+  .checklist th{background:#f8fafc;font-weight:600;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+  .risk-item{padding:12px;margin:8px 0;border-radius:8px;border-left:4px solid;background:#f8fafc}
+  .risk-title{font-weight:600;font-size:14px;margin-bottom:4px}
+  .risk-desc{font-size:13px;color:#475569}
+  .req-table{width:100%;border-collapse:collapse;margin:8px 0}
+  .req-table td,.req-table th{padding:6px 10px;text-align:left;border-bottom:1px solid #e2e8f0;font-size:12px}
+  .req-table th{background:#f8fafc;font-weight:600;color:#475569;font-size:11px;text-transform:uppercase}
+  .rec-list{padding-left:20px}
+  .rec-list li{margin:6px 0;font-size:13px}
+  .footer{margin-top:40px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center}
+  @media print{body{padding:20px}}
+</style></head><body>
+<h1>BidRank RFP Analysis Report</h1>
+<p class="subtitle">Generated on ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+<div class="disclaimer">The Bid Readiness Score and analysis are AI-generated indicators based on RFP text and self-reported business profile. They are not a prediction of contract award and should not be the sole basis for any bid/no-bid decision.</div>
+
+<h2>Executive Summary</h2>
+<p>${r.executiveSummary || "No summary available."}</p>
+
+<h2>Key Metrics</h2>
+<div class="metrics">
+  ${r.keyMetrics.contractValue ? `<div class="metric"><div class="metric-label">Contract Value</div><div class="metric-value">${r.keyMetrics.contractValue}</div></div>` : ""}
+  ${r.keyMetrics.submissionDeadline ? `<div class="metric"><div class="metric-label">Deadline</div><div class="metric-value">${r.keyMetrics.submissionDeadline}</div></div>` : ""}
+  ${r.keyMetrics.agency ? `<div class="metric"><div class="metric-label">Agency</div><div class="metric-value">${r.keyMetrics.agency}</div></div>` : ""}
+  ${r.keyMetrics.naicsCode ? `<div class="metric"><div class="metric-label">NAICS Code</div><div class="metric-value">${r.keyMetrics.naicsCode}</div></div>` : ""}
+  ${r.keyMetrics.naicsDescription ? `<div class="metric"><div class="metric-label">NAICS Description</div><div class="metric-value">${r.keyMetrics.naicsDescription}</div></div>` : ""}
+  ${r.keyMetrics.setAsideType ? `<div class="metric"><div class="metric-label">Set-Aside</div><div class="metric-value">${r.keyMetrics.setAsideType}</div></div>` : ""}
+</div>
+
+<h2>Bid Readiness Score</h2>
+<div class="score-row">
+  <div class="score-big">${r.readinessScore}<span style="font-size:20px;color:#64748b">/100</span></div>
+  <div class="breakdown">
+    <div class="breakdown-item"><span>Compliance Completeness</span><span>${r.scoreBreakdown.complianceCompleteness}%</span></div>
+    <div class="breakdown-item"><span>Capability Match</span><span>${r.scoreBreakdown.capabilityMatch}%</span></div>
+    <div class="breakdown-item"><span>Requirement Clarity</span><span>${r.scoreBreakdown.requirementClarity}%</span></div>
+    <div class="breakdown-item"><span>Historical Patterns</span><span>${r.scoreBreakdown.historicalPatterns}%</span></div>
+  </div>
+</div>
+
+<h2>Bid/No-Bid Recommendation</h2>
+<div class="verdict" style="border-color:${r.bidRecommendation.verdict === "BID" ? "#16a34a" : r.bidRecommendation.verdict === "NO-BID" ? "#dc2626" : "#f59e0b"}">
+  <span class="verdict-badge" style="background:${r.bidRecommendation.verdict === "BID" ? "#16a34a" : r.bidRecommendation.verdict === "NO-BID" ? "#dc2626" : "#f59e0b"}">${r.bidRecommendation.verdict}</span>
+  <p style="font-size:13px;color:#64748b">Confidence: ${Math.round(r.bidRecommendation.confidence * 100)}%</p>
+  <p style="margin-top:8px;font-size:13px">${r.bidRecommendation.reasoning}</p>
+</div>
+${r.bidRecommendation.actionItems?.length ? `<h3 style="margin-top:12px;font-size:14px;font-weight:600">Required Actions</h3><ul class="rec-list">${r.bidRecommendation.actionItems.map((a: string) => `<li>${a}</li>`).join("")}</ul>` : ""}
+
+<h2>Compliance Score: ${overallCompliance}/100</h2>
+${r.complianceCategories.length ? `<div class="breakdown">${r.complianceCategories.map((c: { name: string; score: number }) => `<div class="breakdown-item"><span>${c.name}</span><span>${c.score}%</span></div>`).join("")}</div>` : "<p style='color:#64748b;font-size:13px'>No compliance categories available.</p>"}
+
+${r.complianceChecklist.length ? `<h2>Detailed Compliance Checklist</h2><table class="checklist"><thead><tr><th>Status</th><th>Item</th></tr></thead><tbody>${r.complianceChecklist.map((c: { item: string; status: string }) => `<tr><td>${statusIcon(c.status)}</td><td>${c.item}</td></tr>`).join("")}</tbody></table>` : ""}
+
+${r.risks.length ? `<h2>Risk Details</h2>${r.risks.map((risk: { level: string; title: string; description: string }) => `<div class="risk-item" style="border-left-color:${riskColor(risk.level)}"><div class="risk-title">${risk.level}: ${risk.title}</div><div class="risk-desc">${risk.description}</div></div>`).join("")}` : ""}
+
+${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td>${req.text.length > 200 ? req.text.slice(0, 200) + "..." : req.text}</td><td>${req.priority}</td><td>${req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
+
+${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list">${r.recommendations.map((rec: string) => `<li>${rec}</li>`).join("")}</ol>` : ""}
+
+<div class="footer">BidRank.pro — AI-Powered RFP Analysis | This report is auto-generated and should be reviewed by qualified personnel.</div>
+</body></html>`;
+
+  const win = window.open("", "_blank");
+  if (win) {
+    win.document.write(html);
+    win.document.close();
+    win.onload = () => {
+      win.print();
+    };
+  }
+}
+
 /* ── Helper: Verdict config ────────────────── */
 function getVerdictConfig(verdict: ApiResult["bidRecommendation"]["verdict"]) {
   switch (verdict) {
@@ -593,16 +699,18 @@ export default function AnalyzerPage() {
   if (state === "results") {
     const verdictCfg = getVerdictConfig(result.bidRecommendation.verdict);
     const VerdictIcon = verdictCfg.icon;
-    const overallComplianceScore = Math.round(
-      result.complianceCategories.reduce((sum, c) => sum + c.score, 0) /
-        result.complianceCategories.length
-    );
+    const overallComplianceScore = result.complianceCategories.length
+      ? Math.round(
+          result.complianceCategories.reduce((sum, c) => sum + c.score, 0) /
+            result.complianceCategories.length
+        )
+      : 0;
 
     return (
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
 
-        {/* ── Analysis limit banner (near limit) ── */}
-        {userPlan.authenticated && userPlan.limits && (
+        {/* ── Analysis limit banner ── */}
+        {userPlan.authenticated && userPlan.hasReachedLimit && (
           <UpgradeBanner trigger="analysis_limit" />
         )}
 
@@ -979,7 +1087,7 @@ export default function AnalyzerPage() {
                 return;
               }
               analytics.analysisExported("pdf");
-              // Actual export logic would go here
+              exportToPdf(result);
             }}
           >
             <Download className="w-4 h-4 mr-2" />
