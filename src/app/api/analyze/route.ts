@@ -85,12 +85,41 @@ export async function POST(request: NextRequest) {
         fileName = file.name
         const bytes = await file.arrayBuffer()
         const buffer = Buffer.from(bytes)
+        const ext = file.name.split('.').pop()?.toLowerCase() || ''
 
-        if (file.type === 'application/pdf') {
-          const text = buffer.toString('latin1')
-          rfpText = text.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim()
-        } else {
-          rfpText = buffer.toString('utf-8')
+        try {
+          if (ext === 'pdf' || file.type === 'application/pdf') {
+            const { extractPDFText } = await import('@/lib/extract-pdf')
+            rfpText = await extractPDFText(buffer)
+          } else if (ext === 'docx' || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            const mammoth = await import('mammoth')
+            const result = await mammoth.extractRawText({ buffer })
+            rfpText = (result.value || '').trim()
+          } else if (ext === 'xlsx' || file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+            const XLSX = await import('xlsx')
+            const workbook = XLSX.read(buffer, { type: 'buffer' })
+            const allText: string[] = []
+            for (const sheetName of workbook.SheetNames) {
+              const sheet = workbook.Sheets[sheetName]
+              const rows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 })
+              for (const row of rows) {
+                const rowText = (row as unknown[])
+                  .map((cell) => (cell !== null && cell !== undefined ? String(cell) : ''))
+                  .filter((s) => s.length > 0)
+                  .join(' ')
+                if (rowText) allText.push(rowText)
+              }
+            }
+            rfpText = allText.join('\n').trim()
+          } else {
+            rfpText = buffer.toString('utf-8').trim()
+          }
+        } catch (extractErr) {
+          console.error('[/api/analyze] File extraction failed:', extractErr)
+          return NextResponse.json(
+            { error: `Unable to extract text from "${file.name}". Please ensure the file is a valid PDF, DOCX, or XLSX, or paste the RFP text directly.` },
+            { status: 400 }
+          )
         }
 
         if (!rfpText || rfpText.length < 50) {
