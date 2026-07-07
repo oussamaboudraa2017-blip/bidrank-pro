@@ -367,7 +367,21 @@ export default function AnalyzerPage() {
   const [tourStep, setTourStep] = useState(0);
   const analysisCountRef = useRef(0);
 
-  const result = apiResult ?? MOCK_RESULT;
+  // Merge API response with safe defaults for fields the legacy API may omit
+  const _raw = apiResult ?? MOCK_RESULT;
+  const result: ApiResult = {
+    executiveSummary: _raw.executiveSummary ?? "",
+    readinessScore: _raw.readinessScore ?? 0,
+    scoreBreakdown: _raw.scoreBreakdown ?? { complianceCompleteness: 0, capabilityMatch: 0, requirementClarity: 0, historicalPatterns: 0 },
+    keyMetrics: _raw.keyMetrics ?? { contractValue: null, submissionDeadline: null, agency: null, naicsCode: null, naicsDescription: null, setAsideType: null },
+    complianceChecklist: _raw.complianceChecklist ?? [],
+    complianceCategories: _raw.complianceCategories ?? [],
+    risks: _raw.risks ?? [],
+    riskHeatmap: _raw.riskHeatmap ?? [],
+    bidRecommendation: _raw.bidRecommendation ?? { verdict: "NEEDS REVIEW", confidence: 0, reasoning: "", actionItems: [] },
+    requirements: _raw.requirements ?? [],
+    recommendations: _raw.recommendations ?? [],
+  };
 
   const handleAnalyze = useCallback(async () => {
     if (!file && !text.trim()) return;
