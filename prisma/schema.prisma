@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Better Auth: User ───────────────────────────────────
+model User {
+  id                String    @id
+  name              String
+  email             String
+  emailVerified     Boolean   @default(false)
+  image             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  // BidRank custom fields
+  company           String?
+  certifications    String[]  @default([])
+  naicsCodes        String[]  @default([])
+  plan              String    @default("free")
+  role              String    @default("user")  // "user" | "admin"
+  referralCode      String?   @unique
+  referredByCode    String?
+  analysesThisMonth Int       @default(0)
+  trialStartsAt     DateTime?
+  trialEndsAt       DateTime?
+
+  // Better Auth relations
+  sessions          Session[]
+  accounts          Account[]
+  // BidRank relations
+  analyses          RfpAnalysis[]
+  reviews           Review[]
+  subscription      Subscription?
+  badges            UserBadge[]
+  stats             UserStats?
+  referralsMade     Referral[]       @relation("Referrer")
+  referralCredits   ReferralCredit[]
+  sharedReports     SharedReport[]
+  onboardingEmails  OnboardingEmail[]
+  feedback          UserFeedback[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+// ── Better Auth: Session ────────────────────────────────
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+// ── Better Auth: Account ────────────────────────────────
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+// ── Better Auth: Verification ───────────────────────────
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ── Subscriptions (FastSpring) ────────────────────────
+model Subscription {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  fastspringSubId     String?  @unique
+  fastspringProductId    String?
+  status          String   @default("active")
+  currentPeriodEnd DateTime?
+  cancelAtPeriodEnd Boolean @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ── Consultants ──────────────────────────────────────
+model Consultant {
+  id              String   @id @default(cuid())
+  userId          String?  @unique
+  name            String
+  title           String
+  company         String
+  certifications  String[]
+  industry        String
+  experience      String
+  rating          Float    @default(0)
+  reviewCount     Int      @default(0)
+  bio             String   @db.Text
+  specializations String[]
+  verified        Boolean  @default(false)
+  featured        Boolean  @default(false)
+  website         String?
+  linkedin        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  reviews Review[]
+}
+
+// ── RFP Analyses ─────────────────────────────────────
+model RfpAnalysis {
+  id              String   @id @default(cuid())
+  userId          String
+  fileName        String?
+  rfpTextHash     String?
+  rfpText         String   @db.Text
+  executiveSummary String  @db.Text
+  readinessScore  Int
+  contractValue   String?
+  submissionDeadline String?
+  agency          String?
+  naicsCode       String?
+  setAsideType    String?
+  complianceJson  String   @db.Text
+  risksJson       String   @db.Text
+  recommendationsJson String @db.Text
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sharedReports SharedReport[]
+}
+
+// ── Reviews ──────────────────────────────────────────
+model Review {
+  id            String   @id @default(cuid())
+  userId        String
+  consultantId  String
+  rating        Int
+  title         String?
+  body          String   @db.Text
+  createdAt     DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consultant Consultant @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, consultantId])
+}
+
+// ── User Badges (Gamification) ───────────────────────
+model UserBadge {
+  id          String   @id @default(cuid())
+  userId      String
+  statsId     String
+  badgeKey    String
+  earnedAt    DateTime @default(now())
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stats UserStats @relation(fields: [statsId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeKey])
+}
+
+// ── User Stats (Gamification tracking) ──────────────
+model UserStats {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  totalAnalyses     Int      @default(0)
+  thisMonthAnalyses Int      @default(0)
+  averageScore      Float    @default(0)
+  risksFlagged      Int      @default(0)
+  timeSavedMinutes  Int      @default(0)
+
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badges UserBadge[]
+}
+
+// ── Referrals ────────────────────────────────────────
+model Referral {
+  id              String   @id @default(cuid())
+  referrerId      String
+  referredId      String
+  referralCode    String
+  status          String   @default("pending")
+  referrerReward  Int      @default(2500)
+  referredReward  Int      @default(2500)
+  activatedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+}
+
+// ── Referral Credits ─────────────────────────────────
+model ReferralCredit {
+  id            String   @id @default(cuid())
+  userId        String
+  amount        Int
+  source        String
+  referralId    String?
+  description   String
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ── Shared Reports (public view-only links) ──────────
+model SharedReport {
+  id          String   @id @default(cuid())
+  userId      String
+  analysisId  String
+  token       String   @unique
+  expiresAt   DateTime
+  viewCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysis RfpAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+}
+
+// ── Newsletter Subscriptions ─────────────────────────
+model NewsletterSubscription {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  token     String   @unique
+  active    Boolean  @default(true)
+  source    String   @default("footer")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Onboarding Emails (scheduled queue) ──────────────
+model OnboardingEmail {
+  id          String   @id @default(cuid())
+  userId      String
+  emailKey    String
+  scheduledAt DateTime
+  sentAt      DateTime?
+  status      String   @default("scheduled")
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt])
+}
+
+// ── Analytics Events ──────────────────────────────
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  event     String
+  category  String   @default("general")  // "lifecycle" | "growth" | "product" | "billing"
+  metadata  Json?
+  path      String?
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([event])
+  @@index([category])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("analytics_event")
+}
+
+// ── Customer Feedback & NPS ──────────────────────
+model UserFeedback {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // "nps" | "feature_request" | "bug_report" | "exit_survey"
+  score       Int?     // 0-10 for NPS
+  title       String?
+  comment     String   @db.Text
+  email       String?
+  page        String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("user_feedback")
+}

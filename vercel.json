@@ -1,0 +1,43 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/cron/send-onboarding-emails",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/churn-prevention",
+      "schedule": "0 6 * * *"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ],
+  "functions": {
+    "src/app/api/analyze/route.ts": {
+      "maxDuration": 120
+    },
+    "src/app/api/free-analyze/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/webhooks/**/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/checkout/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/cron/send-onboarding-emails/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/cron/churn-prevention/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
