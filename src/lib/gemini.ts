@@ -598,6 +598,16 @@ function validateAndFix(
     parsed.metadata.agency = detectAgency(rfpText)
   }
 
+  // ── FIX-002 V2: Normalize GSA+DHS/CISA combo agency name ──────
+  if (parsed.metadata.agency) {
+    const ag = parsed.metadata.agency
+    if (/gsa/i.test(ag) && /dhs|cisa/i.test(rfpText)) {
+      parsed.metadata.agency = 'DHS CISA (GSA Contracting)'
+    } else if (/dhs.*cisa|cisa.*dhs/i.test(ag)) {
+      parsed.metadata.agency = 'DHS CISA'
+    }
+  }
+
   // Fix contract value if null but detectable
   if (!parsed.metadata.contract_value) {
     parsed.metadata.contract_value = detectContractValue(rfpText)
@@ -643,6 +653,91 @@ function validateAndFix(
     if (/section\s*508|rehabilitation act/i.test(req.requirement) && req.priority === 'Nice-to-Have') {
       req.priority = 'Important'
       if (req.status === 'Missing') req.status = 'Partial'
+    }
+  }
+
+  // ── FIX-003: Risk Heatmap ↔ Findings severity sync ────────────
+  // Enforce: Security Clearance and CMMC must be "Critical" in BOTH
+  // heatmap and findings. If mismatch, auto-correct to the higher severity.
+  const severityOrder: Record<string, number> = { Low: 0, Medium: 1, High: 2, Critical: 3 }
+  const maxSeverity = (a: string, b: string): 'Critical' | 'High' | 'Medium' | 'Low' => {
+    return (severityOrder[a] ?? 0) >= (severityOrder[b] ?? 0)
+      ? (a as 'Critical' | 'High' | 'Medium' | 'Low')
+      : (b as 'Critical' | 'High' | 'Medium' | 'Low')
+  }
+
+  // Collect the highest severity from all findings for a given topic
+  const allFindings = [
+    ...parsed.critical_findings,
+    ...parsed.high_findings,
+    ...parsed.medium_findings,
+    ...parsed.low_findings,
+  ]
+
+  // Security Clearance: must be Critical in heatmap if any CRITICAL finding mentions clearance
+  const clearanceFindings = allFindings.filter(f => /clearance/i.test(f.finding))
+  if (clearanceFindings.length > 0) {
+    const maxClearanceSeverity = clearanceFindings.reduce(
+      (max, f) => maxSeverity(f.severity, max), 'Low' as string
+    )
+    if (parsed.risk_heatmap.security_clearance) {
+      parsed.risk_heatmap.security_clearance = maxSeverity(
+        parsed.risk_heatmap.security_clearance, maxClearanceSeverity
+      )
+    }
+    // Upgrade any clearance finding below the heatmap level
+    const heatmapLevel = parsed.risk_heatmap.security_clearance
+    for (const f of clearanceFindings) {
+      if ((severityOrder[f.severity] ?? 0) < (severityOrder[heatmapLevel] ?? 0)) {
+        f.severity = heatmapLevel === 'Critical' ? 'CRITICAL'
+          : heatmapLevel === 'High' ? 'HIGH'
+          : heatmapLevel === 'Medium' ? 'MEDIUM' : 'LOW'
+        f.indicator = SEVERITY_INDICATORS[f.severity] || '🟡'
+      }
+    }
+  }
+
+  // CMMC / Cybersecurity Certifications: must be Critical in heatmap if CMMC finding is CRITICAL
+  const cmmcFindings = allFindings.filter(f => /CMMC|cybersecurity certification/i.test(f.finding))
+  if (cmmcFindings.length > 0) {
+    const maxCmmcSeverity = cmmcFindings.reduce(
+      (max, f) => maxSeverity(f.severity, max), 'Low' as string
+    )
+    if (parsed.risk_heatmap.cybersecurity_certifications) {
+      parsed.risk_heatmap.cybersecurity_certifications = maxSeverity(
+        parsed.risk_heatmap.cybersecurity_certifications, maxCmmcSeverity
+      )
+    }
+    // Upgrade any CMMC finding below the heatmap level
+    const heatmapLevel = parsed.risk_heatmap.cybersecurity_certifications
+    for (const f of cmmcFindings) {
+      if ((severityOrder[f.severity] ?? 0) < (severityOrder[heatmapLevel] ?? 0)) {
+        f.severity = heatmapLevel === 'Critical' ? 'CRITICAL'
+          : heatmapLevel === 'High' ? 'HIGH'
+          : heatmapLevel === 'Medium' ? 'MEDIUM' : 'LOW'
+        f.indicator = SEVERITY_INDICATORS[f.severity] || '🟡'
+      }
+    }
+  }
+
+  // Financial: enforce minimum based on contract value
+  const contractVal = parsed.metadata.contract_value
+  const contractNum = parseDollarValue(contractVal)
+  const isSmallBizSetAside = /small business|8\s*\(\s*a\s*\)|SDVOSB|WOSB|HUBZone/i.test(
+    parsed.metadata.set_aside || ''
+  )
+  if (contractNum !== null && parsed.risk_heatmap.financial) {
+    let minFinancial: 'Critical' | 'High' | 'Medium' | 'Low' = 'Low'
+    if (isSmallBizSetAside) {
+      if (contractNum > 5_000_000) minFinancial = 'Critical'
+      else if (contractNum > 2_000_000) minFinancial = 'High'
+      else if (contractNum > 1_000_000) minFinancial = 'Medium'
+    } else {
+      if (contractNum > 25_000_000) minFinancial = 'Critical'
+      else if (contractNum > 10_000_000) minFinancial = 'High'
+    }
+    if ((severityOrder[parsed.risk_heatmap.financial] ?? 0) < (severityOrder[minFinancial] ?? 0)) {
+      parsed.risk_heatmap.financial = minFinancial
     }
   }
 
@@ -1228,6 +1323,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
   // ── FIX-003: Risk Heatmap ↔ Risk Details consistency ──────────
   // Enforce: Security Clearance and CMMC must be "Critical" in BOTH
 
+  // Detect requirements from RFP text for post-processing
+  const hasClearanceReq = /\b(Secret|Top Secret|TS\/SCI)\b/i.test(rfpText)
+  const hasCMMCReq = /\bCMMC\s*(Level\s*)?[1-3]\b|\bDFARS\s*252\.204-7012\b/i.test(rfpText)
+
   // Fix: Security Clearance risk must be Critical in heatmap
   if (hasClearanceReq) {
     const secRisk = parsed.risks.find(r => /clearance/i.test(r.title))
@@ -1285,15 +1384,17 @@ Return ONLY valid JSON, no markdown, no explanation.`
   }
 
   // ── FIX-002: Agency name consistency ───────────────────────────
-  // Normalize agency in keyMetrics
+  // Normalize agency in keyMetrics per v4.0 spec
   const agency = parsed.keyMetrics?.agency || ''
-  if (/gsa/i.test(agency) && /dhs|cisa/i.test(rfpText)) {
-    const normalizedAgency = /dhs.*cisa|cisa.*dhs/i.test(rfpText)
-      ? 'Department of Homeland Security (DHS), Cybersecurity and Infrastructure Security Agency (CISA)'
-      : /cisa/i.test(rfpText)
-        ? 'Cybersecurity and Infrastructure Security Agency (CISA)'
-        : 'Department of Homeland Security (DHS)'
+  if (/gsa/i.test(agency || rfpText) && /dhs|cisa/i.test(rfpText)) {
+    const normalizedAgency = 'DHS CISA (GSA Contracting)'
     if (parsed.keyMetrics) parsed.keyMetrics.agency = normalizedAgency
+  } else if (/dhs.*cisa|cisa.*dhs/i.test(rfpText)) {
+    if (parsed.keyMetrics) parsed.keyMetrics.agency = 'DHS CISA'
+  } else if (/cisa/i.test(rfpText)) {
+    if (parsed.keyMetrics) parsed.keyMetrics.agency = 'CISA'
+  } else if (/dhs/i.test(rfpText)) {
+    if (parsed.keyMetrics) parsed.keyMetrics.agency = 'DHS'
   }
 
   // Fix agency references in recommendations
@@ -1304,7 +1405,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
       : finalAgency.split(',')[0].trim()
     parsed.recommendations = parsed.recommendations.map(rec => {
       // Replace inconsistent agency references with the canonical one
-      return rec.replace(/This GSA RFP/g, `This ${agencyShort} RFP`)
+      return rec
+        .replace(/This GSA RFP/gi, `This ${agencyShort} RFP`)
+        .replace(/This Department of Homeland Security.*?RFP/gi, `This ${agencyShort} RFP`)
+        .replace(/This Cybersecurity and Infrastructure.*?RFP/gi, `This ${agencyShort} RFP`)
     })
   }
 
