@@ -543,6 +543,11 @@ function validateAndFix(
     parsed.requirement_extractor = buildDefaultRequirements(rfpText)
   }
 
+  // ── FIX-001: Supplement requirements from mandatory RFP sections ──
+  // If the AI returned fewer than 15, scan the RFP for mandatory sections
+  // and add any that are missing.  Also remove known false positives.
+  parsed.requirement_extractor = supplementRequirements(parsed.requirement_extractor, rfpText)
+
   // ── Ensure FAR compliance exists FIRST ───────────────────────
   // Must be built before score calculation so missingFARs is accurate.
   if (!parsed.far_compliance) {
@@ -647,6 +652,11 @@ function validateAndFix(
 
   // Enforce forbidden language in all findings
   enforceLanguageRules(parsed)
+
+  // ── FIX-008: Rebuild recommendations from findings if template not followed
+  parsed.top_recommendations = enforceRecommendationTemplate(
+    parsed.top_recommendations, parsed, rfpText
+  )
 
   // ── FIX-004: Section 508 priority enforcement ──────────────────
   for (const req of parsed.requirement_extractor) {
@@ -912,6 +922,164 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
   }
 
   return reqs
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FIX-001: REQUIREMENT SUPPLEMENTER
+   Scans RFP for mandatory sections, adds missing requirements,
+   and removes known false positives.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const MANDATORY_SECTIONS: Array<{
+  sectionRe: RegExp
+  section: string
+  description: string
+  priority: 'Critical' | 'Important' | 'Nice-to-Have'
+}> = [
+  { sectionRe: /C\.?\s*2\.1|system\s*administration/i, section: 'C.2.1', description: 'System administration (workstations, servers, patch management, uptime SLAs)', priority: 'Critical' },
+  { sectionRe: /C\.?\s*2\.2|help\s*desk/i, section: 'C.2.2', description: 'Help desk support (tiered support, business hours, after-hours response)', priority: 'Critical' },
+  { sectionRe: /C\.?\s*2\.3|cybersecurity|nist\s*sp\s*800/i, section: 'C.2.3', description: 'Cybersecurity controls (NIST, CMMC, incident response, continuous monitoring)', priority: 'Critical' },
+  { sectionRe: /C\.?\s*2\.4|cloud\s*migration/i, section: 'C.2.4', description: 'Cloud migration support (AWS/Azure/GCP, assessment, migration, training)', priority: 'Important' },
+  { sectionRe: /L\.?\s*1\.1|proposal\s*format/i, section: 'L.1.1', description: 'Proposal format and structure requirements', priority: 'Critical' },
+  { sectionRe: /L\.?\s*2\.2|past\s*performance/i, section: 'L.2.2', description: 'Past performance references (minimum count, recency, documentation)', priority: 'Important' },
+  { sectionRe: /L\.?\s*3\.1|security\s*clearance/i, section: 'L.3.1', description: 'Security clearance requirements for key personnel', priority: 'Critical' },
+  { sectionRe: /L\.?\s*3\.2|section\s*508|rehabilitation\s*act/i, section: 'L.3.2', description: 'Section 508 accessibility compliance (Rehabilitation Act)', priority: 'Important' },
+  { sectionRe: /L\.?\s*3\.3|CMMC/i, section: 'L.3.3', description: 'CMMC certification requirement and timeline', priority: 'Critical' },
+  { sectionRe: /H\.?\s*[14]|contract\s*value|key\s*personnel/i, section: 'H', description: 'Key personnel requirements (roles, FTE, on-site presence)', priority: 'Important' },
+  { sectionRe: /K\.?\s*[12]|SAM\.gov|small\s*business\s*cert/i, section: 'K', description: 'SAM.gov registration and small business certification', priority: 'Critical' },
+]
+
+// Patterns that indicate a requirement is likely a false positive
+// (invented by the AI, not actually in the RFP)
+const FALSE_POSITIVE_PATTERNS: Array<{ re: RegExp; allowedIf: RegExp }> = [
+  { re: /ISO\s*27001/i, allowedIf: /ISO\s*27001/i },
+  { re: /QA\s*surveillance\s*plan|quality\s*assurance\s*surveillance/i, allowedIf: /QA\s*surveillance\s*plan|QASP|quality\s*assurance\s*surveillance/i },
+  { re: /bonding\s*capacity/i, allowedIf: /bond(?:ing)?\s*(?:capacity|requirement)/i },
+]
+
+function supplementRequirements(
+  existing: V2Requirement[],
+  rfpText: string
+): V2Requirement[] {
+  // 1. Remove false positives — requirements that reference concepts NOT in the RFP
+  const filtered = existing.filter(req => {
+    for (const fp of FALSE_POSITIVE_PATTERNS) {
+      if (fp.re.test(req.requirement) && !fp.allowedIf.test(rfpText)) {
+        return false
+      }
+    }
+    return true
+  })
+
+  // 2. Track which mandatory sections are already covered
+  const coveredSections = new Set<string>()
+  for (const req of filtered) {
+    for (const ms of MANDATORY_SECTIONS) {
+      if (ms.sectionRe.test(req.section) || ms.sectionRe.test(req.requirement)) {
+        coveredSections.add(ms.section)
+      }
+    }
+  }
+
+  // 3. Add missing mandatory sections (only if the RFP actually mentions them)
+  const nextId = filtered.length + 1
+  let idCounter = nextId
+  const supplemented = [...filtered]
+
+  for (const ms of MANDATORY_SECTIONS) {
+    if (!coveredSections.has(ms.section) && ms.sectionRe.test(rfpText)) {
+      supplemented.push({
+        id: `REQ-${String(idCounter++).padStart(3, '0')}`,
+        section: ms.section,
+        requirement: ms.description,
+        priority: ms.priority,
+        status: 'Missing',
+      })
+    }
+  }
+
+  // 4. Re-number all IDs sequentially
+  supplemented.forEach((req, i) => {
+    req.id = `REQ-${String(i + 1).padStart(3, '0')}`
+  })
+
+  return supplemented
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FIX-008: RECOMMENDATION TEMPLATE ENFORCER
+   Validates each recommendation against the required template.
+   If fewer than 3 of 5 match, rebuilds all 5 from findings.
+   Template: "[SEVERITY]: This [AGENCY] RFP requires [req] ([Section]). [Action]. Missing this = [consequence]."
+   ═══════════════════════════════════════════════════════════════════ */
+
+function enforceRecommendationTemplate(
+  recs: string[],
+  result: V2AnalysisResult,
+  _rfpText: string
+): string[] {
+  const agency = result.metadata.agency || 'the agency'
+
+  // Count how many recommendations follow the template
+  const templatePattern = /^\[(CRITICAL|HIGH|MEDIUM|IMPORTANT|LOW)\]:\s*This\s+/i
+  let compliant = 0
+  for (const rec of recs) {
+    const hasSeverity = templatePattern.test(rec)
+    const hasSectionRef = /section\s+\w[\w.\s]*\d/i.test(rec)
+    const hasConsequence = /missing this\s*=|inadequate\s*=|non-compliance\s*=|failure\s*=|disqualification/i.test(rec)
+    if (hasSeverity && hasSectionRef && hasConsequence) compliant++
+  }
+
+  // If 4+ of 5 are compliant, just fix the agency name and return
+  if (compliant >= 4) {
+    return recs.map(rec => {
+      if (agency && !rec.toLowerCase().includes(agency.toLowerCase().split(' ').slice(-2).join(' '))) {
+        // Try to inject agency name after "This"
+        return rec.replace(/This\s+(?:[A-Z][\w\s]*?)\s+RFP/i, `This ${agency} RFP`)
+      }
+      return rec
+    })
+  }
+
+  // Otherwise, rebuild all 5 from findings
+  const built: string[] = []
+  const allFindings: V2Finding[] = [
+    ...result.critical_findings,
+    ...result.high_findings,
+    ...result.medium_findings,
+  ].filter(f => f.finding && f.action && f.source)
+
+  // Deduplicate by topic (keep first/highest severity per topic)
+  const seen = new Set<string>()
+  const unique: V2Finding[] = []
+  for (const f of allFindings) {
+    const topic = f.finding.split(' ').slice(0, 4).join(' ').toLowerCase()
+    if (!seen.has(topic)) {
+      seen.add(topic)
+      unique.push(f)
+    }
+  }
+
+  // Build recommendations from findings
+  for (const f of unique.slice(0, 5)) {
+    const severity = f.severity === 'CRITICAL' ? 'CRITICAL'
+      : f.severity === 'HIGH' ? 'HIGH'
+      : f.severity === 'MEDIUM' ? 'MEDIUM' : 'IMPORTANT'
+    const consequence = f.consequence || 'reduced evaluation score'
+    const source = f.source || 'the solicitation'
+    built.push(
+      `[${severity}]: This ${agency} RFP requires ${f.finding.replace(/[.]+$/, '')} (${source}). ${f.action.replace(/[.]+$/, '')}. Missing this = ${consequence.replace(/[.]+$/, '')}.`
+    )
+  }
+
+  // Pad to exactly 5 if needed
+  while (built.length < 5) {
+    built.push(
+      `[MEDIUM]: This ${agency} RFP requires thorough review of all evaluation criteria. Verify your proposal addresses each requirement in the solicitation. Missing this = lower evaluation score.`
+    )
+  }
+
+  return built.slice(0, 5)
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1410,6 +1578,44 @@ Return ONLY valid JSON, no markdown, no explanation.`
         .replace(/This Department of Homeland Security.*?RFP/gi, `This ${agencyShort} RFP`)
         .replace(/This Cybersecurity and Infrastructure.*?RFP/gi, `This ${agencyShort} RFP`)
     })
+  }
+
+  // ── FIX-008 Legacy: Enforce recommendation template ─────────────
+  const agencyName = parsed.keyMetrics?.agency || 'the agency'
+  const recTemplate = /^\[(CRITICAL|HIGH|MEDIUM|IMPORTANT|LOW)\]:\s*This\s+/i
+  let recCompliant = 0
+  for (const rec of parsed.recommendations) {
+    const hasS = recTemplate.test(rec)
+    const hasSec = /section\s+\w[\w.\s]*\d/i.test(rec)
+    const hasCon = /missing this\s*=|inadequate\s*=|non-compliance\s*=|failure\s*=|disqualification/i.test(rec)
+    if (hasS && hasSec && hasCon) recCompliant++
+  }
+  // If fewer than 3 of 5 are compliant, rebuild from risks
+  if (recCompliant < 3 && parsed.risks && parsed.risks.length > 0) {
+    const severityMap: Record<string, string> = { Critical: 'CRITICAL', High: 'HIGH', Medium: 'MEDIUM', Low: 'LOW' }
+    const rebuilt: string[] = []
+    const usedTitles = new Set<string>()
+    for (const risk of parsed.risks) {
+      if (rebuilt.length >= 5) break
+      const title = risk.title.toLowerCase()
+      if (usedTitles.has(title)) continue
+      usedTitles.add(title)
+      const sev = severityMap[risk.level] || 'MEDIUM'
+      const desc = (risk.description || '').replace(/[.]+$/, '')
+      const consequence = desc.includes('disqualif') ? 'automatic disqualification'
+        : desc.includes('non-complian') ? 'contract non-compliance'
+        : desc.includes('financial') ? 'financial loss or performance risk'
+        : 'lower evaluation score'
+      rebuilt.push(
+        `[${sev}]: This ${agencyName} RFP requires ${risk.title} (per solicitation requirements). ${desc}. Missing this = ${consequence}.`
+      )
+    }
+    while (rebuilt.length < 5) {
+      rebuilt.push(
+        `[MEDIUM]: This ${agencyName} RFP requires thorough review of all evaluation criteria. Verify your proposal addresses each requirement. Missing this = lower evaluation score.`
+      )
+    }
+    parsed.recommendations = rebuilt.slice(0, 5)
   }
 
   // ── FIX-005: Zero-tolerance + CONDITIONAL enforcement ──────────
