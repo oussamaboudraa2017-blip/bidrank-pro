@@ -44,7 +44,7 @@ export interface V2Requirement {
   section: string
   requirement: string
   priority: 'Critical' | 'Important' | 'Nice-to-Have'
-  status: 'Met' | 'Partial' | 'Missing'
+  status: 'Met' | 'Action Required' | 'Missing'
 }
 
 export interface V2AnalysisResult {
@@ -108,7 +108,7 @@ export interface AnalysisResult {
     section: string
     text: string
     priority: 'Critical' | 'Important' | 'Nice-to-Have'
-    status: 'Met' | 'Partial' | 'Missing'
+    status: 'Met' | 'Action Required' | 'Missing'
   }>
   recommendations: string[]
 }
@@ -146,10 +146,11 @@ Return ONLY valid JSON matching this exact structure:
     "security_clearance": "Critical" | "High" | "Medium" | "Low",
     "cybersecurity_certifications": "Critical" | "High" | "Medium" | "Low",
     "operational_demands": "Critical" | "High" | "Medium" | "Low",
+    "proposal_submission": "Critical" | "High" | "Medium" | "Low",
     "timeline": "Critical" | "High" | "Medium" | "Low",
-    "subcontracting": "Critical" | "High" | "Medium" | "Low",
     "past_performance": "Critical" | "High" | "Medium" | "Low",
-    "personnel": "Critical" | "High" | "Medium" | "Low"
+    "personnel": "Critical" | "High" | "Medium" | "Low",
+    "subcontracting": "Critical" | "High" | "Medium" | "Low"
   },
   "requirement_extractor": [
     {
@@ -157,7 +158,7 @@ Return ONLY valid JSON matching this exact structure:
       "section": "Section L",
       "requirement": "Exact requirement text from RFP",
       "priority": "Critical" | "Important" | "Nice-to-Have",
-      "status": "Met" | "Partial" | "Missing"
+      "status": "Met" | "Action Required" | "Missing"
     }
   ],
   "critical_findings": [
@@ -267,7 +268,7 @@ Additional risk factors: bonding requirements not documented, security clearance
 - You MUST extract 15-20 requirements minimum. NEVER return fewer than 12.
 - Each requirement gets a unique ID: REQ-001, REQ-002, etc.
 - Priority: "Critical" = mandatory, "Important" = evaluated, "Nice-to-Have" = optional
-- Status: "Met" = clearly addressed, "Partial" = partially addressed, "Missing" = not addressed
+- Status: "Met" = clearly addressed, "Action Required" = partially addressed or needs verification, "Missing" = not addressed
 - Security clearance, CMMC, FedRAMP, FCL requirements MUST appear in the extractor
 
 ### MANDATORY SECTIONS TO SCAN — never skip these:
@@ -662,7 +663,7 @@ function validateAndFix(
   for (const req of parsed.requirement_extractor) {
     if (/section\s*508|rehabilitation act/i.test(req.requirement) && req.priority === 'Nice-to-Have') {
       req.priority = 'Important'
-      if (req.status === 'Missing') req.status = 'Partial'
+      if (req.status === 'Missing') req.status = 'Action Required'
     }
   }
 
@@ -763,7 +764,8 @@ function validateAndFix(
   }> = [
     { keywords: ['compliance', 'policy', 'far', 'regulation'], severity: 'HIGH', finding: 'FAR clause and regulatory compliance requirements', source: 'Section L and K', action: 'Verify all applicable FAR clauses are addressed in the proposal', consequence: 'missing clauses result in proposal rejection' },
     { keywords: ['operational', 'sla', 'performance', 'cloud service'], severity: 'HIGH', finding: 'Operational performance and SLA compliance demands', source: 'Section C', action: 'Document operational capabilities and SLA attainment strategy', consequence: 'failure to meet SLAs results in performance penalties' },
-    { keywords: ['timeline', 'deadline', 'proposal submission'], severity: 'MEDIUM', finding: 'Proposal submission timeline constraints', source: 'Section L', action: 'Begin proposal preparation immediately to meet submission deadline', consequence: 'late submissions are automatically disqualified' },
+    { keywords: ['proposal_submission', 'proposal format', 'submission'], severity: 'HIGH', finding: 'Proposal submission format, page limits, and deadline requirements', source: 'Section L.1', action: 'Ensure all proposal volumes are properly formatted and submitted before the deadline', consequence: 'late or improperly formatted submissions are automatically disqualified' },
+    { keywords: ['timeline'], severity: 'MEDIUM', finding: 'Proposal timeline and schedule constraints', source: 'Section L', action: 'Begin proposal preparation immediately to meet submission deadline', consequence: 'late submissions are automatically disqualified' },
     { keywords: ['past performance', 'reference'], severity: 'MEDIUM', finding: 'Past performance documentation requirements', source: 'Section L.2.2', action: 'Compile 3-5 relevant past performance references with POC contact information', consequence: 'insufficient or irrelevant references lower evaluation score' },
     { keywords: ['personnel', 'staffing'], severity: 'MEDIUM', finding: 'Key personnel staffing and qualification requirements', source: 'Section H.4', action: 'Identify qualified personnel meeting all experience and clearance requirements', consequence: 'unqualified personnel result in key positions being unfilled' },
     { keywords: ['subcontracting', 'small business'], severity: 'LOW', finding: 'Small business subcontracting plan requirements', source: 'Section L.2.3 and FAR 52.219-9', action: 'Develop subcontracting plan with achievable goals for required categories', consequence: 'missing or inadequate plan results in evaluation deduction' },
@@ -913,10 +915,13 @@ function buildDefaultRiskHeatmap(
     compliance: 'Medium',
     financial,
     security_clearance: securityClearance,
+    cybersecurity_certifications: (hasCMMC || hasFedRAMP) ? 'High' : 'Low',
+    operational_demands: 'Medium',
+    proposal_submission: 'Medium',
     timeline: 'Medium',
-    subcontracting: hasSubcontracting ? 'Medium' : 'Low',
     past_performance: hasPastPerf ? 'Medium' : 'Low',
     personnel: 'Low',
+    subcontracting: hasSubcontracting ? 'Medium' : 'Low',
   }
 }
 
@@ -924,7 +929,7 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
   const reqs: V2Requirement[] = []
   let id = 1
 
-  const addReq = (section: string, requirement: string, priority: 'Critical' | 'Important' | 'Nice-to-Have', status: 'Met' | 'Partial' | 'Missing') => {
+  const addReq = (section: string, requirement: string, priority: 'Critical' | 'Important' | 'Nice-to-Have', status: 'Met' | 'Action Required' | 'Missing') => {
     reqs.push({ id: `REQ-${String(id++).padStart(3, '0')}`, section, requirement, priority, status })
   }
 
@@ -953,12 +958,12 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
   // Past performance
   if (/past performance/i.test(text)) {
     const match = text.match(/(\d+)\s*(?:of\s*)?(\d+)\s*past performance/i)
-    addReq('Section L', 'Past performance references', 'Critical', match ? 'Partial' : 'Missing')
+    addReq('Section L', 'Past performance references', 'Critical', match ? 'Action Required' : 'Missing')
   }
 
   // Subcontracting plan
   if (/subcontract(?:ing)?\s*plan/i.test(text)) {
-    addReq('Section L', 'Small business subcontracting plan', 'Important', 'Partial')
+    addReq('Section L', 'Small business subcontracting plan', 'Important', 'Action Required')
   }
 
   // Key personnel
@@ -973,7 +978,7 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
 
   // Quality assurance
   if (/quality assurance/i.test(text)) {
-    addReq('Section M', 'Quality assurance surveillance plan', 'Nice-to-Have', 'Partial')
+    addReq('Section M', 'Quality assurance surveillance plan', 'Nice-to-Have', 'Action Required')
   }
 
   // ISO certification
@@ -1075,11 +1080,12 @@ function supplementRequirements(
     }
   }
 
-  // 4. P1: Change "Partial" to "Missing" — without user profile,
-  //    we cannot confirm partial compliance, so "Missing" is more honest.
+  // 4. P1: Change "Partial" to "Action Required" — without user profile,
+  //    we cannot confirm partial compliance. "Action Required" is more accurate
+  //    than "Missing" since the RFP section was partially detected.
   for (const req of supplemented) {
     if (req.status === 'Partial') {
-      req.status = 'Missing'
+      req.status = 'Action Required'
     }
   }
 
@@ -1157,11 +1163,21 @@ function enforceRecommendationTemplate(
     )
   }
 
-  // Pad to exactly 5 if needed
+  // Pad to exactly 5 if needed — reference specific evaluation factors from findings
+  const evaluationFactors = [
+    'technical approach and past performance',
+    'proposed staffing plan and key personnel qualifications',
+    'compliance with all FAR clauses and submission format requirements',
+    'small business subcontracting goals and mentor-protégé commitments',
+    'cost realism and total evaluated price',
+  ]
+  let padIdx = 0
   while (built.length < 5) {
+    const factor = evaluationFactors[padIdx % evaluationFactors.length]
     built.push(
-      `[MEDIUM]: This ${agency} RFP requires thorough review of all evaluation criteria. Verify your proposal addresses each requirement in the solicitation. Missing this = lower evaluation score.`
+      `[MEDIUM]: This ${agency} RFP requires evaluation on ${factor}. Verify your proposal demonstrates clear capability and compliance with the stated evaluation criteria. Missing this = lower evaluation score.`
     )
+    padIdx++
   }
 
   return built.slice(0, 5)
@@ -1429,7 +1445,7 @@ export async function analyzeRFP(rfpText: string): Promise<AnalysisResult> {
     "actionItems": ["Specific action 1", "Specific action 2", ...]
   },
   "requirements": [
-    { "id": "REQ-001", "section": "Section L", "text": "Exact requirement", "priority": "Critical|Important|Nice-to-Have", "status": "Met|Partial|Missing" }
+    { "id": "REQ-001", "section": "Section L", "text": "Exact requirement", "priority": "Critical|Important|Nice-to-Have", "status": "Met|Action Required|Missing" }
   ],
   "recommendations": [
     "[SEVERITY]: This [Agency] RFP requires [specific requirement] ([Section X.Y]). [Action] within [timeline]. Missing this = [consequence].",
@@ -1569,7 +1585,7 @@ Return ONLY valid JSON, no markdown, no explanation.`
   for (const req of (parsed.requirements || [])) {
     if (/section\s*508|rehabilitation act/i.test(req.text) && req.priority === 'Nice-to-Have') {
       req.priority = 'Important'
-      if (req.status === 'Missing') req.status = 'Partial'
+      if (req.status === 'Missing') req.status = 'Action Required'
     }
   }
 
@@ -1695,10 +1711,20 @@ Return ONLY valid JSON, no markdown, no explanation.`
         `[${sev}]: This ${agencyName} RFP requires ${risk.title} (per solicitation requirements). ${desc}. Missing this = ${consequence}.`
       )
     }
+    const legacyFactors = [
+      'technical approach and past performance',
+      'proposed staffing plan and key personnel qualifications',
+      'compliance with all FAR clauses and submission format requirements',
+      'small business subcontracting goals and mentor-protégé commitments',
+      'cost realism and total evaluated price',
+    ]
+    let legacyPadIdx = 0
     while (rebuilt.length < 5) {
+      const factor = legacyFactors[legacyPadIdx % legacyFactors.length]
       rebuilt.push(
-        `[MEDIUM]: This ${agencyName} RFP requires thorough review of all evaluation criteria. Verify your proposal addresses each requirement. Missing this = lower evaluation score.`
+        `[MEDIUM]: This ${agencyName} RFP requires evaluation on ${factor}. Verify your proposal demonstrates clear capability and compliance with the stated evaluation criteria. Missing this = lower evaluation score.`
       )
+      legacyPadIdx++
     }
     parsed.recommendations = rebuilt.slice(0, 5)
   }
@@ -1765,9 +1791,25 @@ Return ONLY valid JSON, no markdown, no explanation.`
     })
   }
 
-  // ── P1 Legacy: Change "Partial" to "Missing" for unknown profile ─
+  // ── P2 Legacy: Change "Partial" to "Missing" for unknown profile ─
   for (const req of (parsed.requirements || [])) {
     if (req.status === 'Partial') req.status = 'Missing'
+    if (req.status === 'Action Required') req.status = 'Missing'
+  }
+
+  // ── P3: Add FCL Not Required to complianceChecklist ──
+  const hasFCLReq = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
+  const hasFCLItem = parsed.complianceChecklist.some(c => /FCL|facility\s*clearance/i.test(c.item))
+  if (!hasFCLReq && !hasFCLItem) {
+    parsed.complianceChecklist.push({
+      item: 'Facility Clearance (FCL) — not required for this contract',
+      status: 'pass',
+    })
+  } else if (hasFCLReq && !hasFCLItem) {
+    parsed.complianceChecklist.push({
+      item: 'Facility Clearance (FCL) — required, verify current FCL status or ability to obtain',
+      status: 'fail',
+    })
   }
 
   return parsed

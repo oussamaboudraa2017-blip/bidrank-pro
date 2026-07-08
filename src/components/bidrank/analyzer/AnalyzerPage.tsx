@@ -113,7 +113,7 @@ interface ApiResult {
     section: string;
     text: string;
     priority: "Critical" | "Important" | "Nice-to-Have";
-    status: "Met" | "Partial" | "Missing";
+    status: "Met" | "Action Required" | "Missing";
   }>;
   recommendations: string[];
 }
@@ -184,14 +184,14 @@ const MOCK_RESULT: ApiResult = {
   },
   requirements: [
     { id: "REQ-001", section: "L", text: "Technical approach narrative not to exceed 30 pages", priority: "Critical", status: "Met" },
-    { id: "REQ-002", section: "L", text: "Past performance references (minimum 3 required)", priority: "Critical", status: "Partial" },
+    { id: "REQ-002", section: "L", text: "Past performance references (minimum 3 required)", priority: "Critical", status: "Action Required" },
     { id: "REQ-003", section: "M", text: "Firm fixed pricing with cost breakdown", priority: "Critical", status: "Met" },
     { id: "REQ-004", section: "H", text: "Secret-level clearance for key personnel", priority: "Critical", status: "Missing" },
-    { id: "REQ-005", section: "L", text: "Small business subcontracting plan", priority: "Important", status: "Partial" },
+    { id: "REQ-005", section: "L", text: "Small business subcontracting plan", priority: "Important", status: "Action Required" },
     { id: "REQ-006", section: "M", text: "Key personnel resumes with 5-year experience", priority: "Important", status: "Met" },
     { id: "REQ-007", section: "C", text: "Cloud migration experience demonstration", priority: "Important", status: "Met" },
     { id: "REQ-008", section: "L", text: "Bonding capacity documentation", priority: "Important", status: "Missing" },
-    { id: "REQ-009", section: "M", text: "Quality assurance surveillance plan", priority: "Nice-to-Have", status: "Partial" },
+    { id: "REQ-009", section: "M", text: "Quality assurance surveillance plan", priority: "Nice-to-Have", status: "Action Required" },
     { id: "REQ-010", section: "H", text: "ISO 27001 certification or equivalent", priority: "Nice-to-Have", status: "Missing" },
   ],
   recommendations: [
@@ -376,7 +376,7 @@ ${r.risks.length ? `<h2>Risk Details</h2>${r.risks.map((risk: { level: string; t
 
 ${r.riskHeatmap.length ? `<h2>Risk Heatmap</h2><table class="req-table"><thead><tr><th>Category</th><th>Risk Level</th></tr></thead><tbody>${r.riskHeatmap.map((h: { category: string; level: string }) => `<tr><td>${h.category}</td><td style="color:${h.level === 'Critical' ? '#dc2626' : h.level === 'High' ? '#f59e0b' : h.level === 'Medium' ? '#f59e0b' : '#16a34a'};font-weight:600">${h.level}</td></tr>`).join("")}</tbody></table>` : ""}
 
-${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td style="white-space:normal;max-width:400px">${req.text}</td><td>${req.priority}</td><td>${req.status === 'Missing' ? 'Action Required' : req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
+${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td style="white-space:normal;max-width:400px">${req.text}</td><td>${req.priority}</td><td>${req.status === 'Missing' ? 'Action Required' : req.status === 'Partial' ? 'Action Required' : req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
 
 ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list">${r.recommendations.map((rec: string) => `<li>${rec}</li>`).join("")}</ol>` : ""}
 
@@ -454,13 +454,15 @@ function PriorityBadge({ priority }: { priority: string }) {
 function StatusBadge({ status }: { status: string }) {
   const label: Record<string, string> = {
     Met: "Met",
-    Partial: "Partial",
+    "Action Required": "Action Required",
     Missing: "Action Required",
+    Partial: "Action Required",
   };
   const config: Record<string, string> = {
     Met: "bg-br-success/10 text-br-success border-br-success/30",
-    Partial: "bg-br-warning/10 text-br-warning border-br-warning/30",
+    "Action Required": "bg-br-warning/10 text-br-warning border-br-warning/30",
     Missing: "bg-br-error/10 text-br-error border-br-error/30",
+    Partial: "bg-br-warning/10 text-br-warning border-br-warning/30",
   };
   return (
     <Badge variant="outline" className={`text-xs font-medium ${config[status] ?? ""}`}>
@@ -647,7 +649,7 @@ export default function AnalyzerPage() {
   };
 
   const priorityOrder: Record<string, number> = { Critical: 0, Important: 1, "Nice-to-Have": 2 };
-  const statusOrder: Record<string, number> = { Missing: 0, Partial: 1, Met: 2 };
+  const statusOrder: Record<string, number> = { Missing: 0, "Action Required": 1, Partial: 1, Met: 2 };
 
   const filteredReqs = result.requirements
     .filter((r) => {
