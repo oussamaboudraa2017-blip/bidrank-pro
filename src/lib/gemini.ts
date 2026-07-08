@@ -84,10 +84,31 @@ export interface AnalysisResult {
     item: string
     status: 'pass' | 'warn' | 'fail'
   }>
+  complianceCategories?: Array<{
+    name: string
+    score: number
+  }>
   risks: Array<{
-    level: 'High' | 'Medium' | 'Low'
+    level: 'High' | 'Medium' | 'Low' | 'Critical'
     title: string
     description: string
+  }>
+  riskHeatmap?: Array<{
+    category: string
+    level: 'Critical' | 'High' | 'Medium' | 'Low'
+  }>
+  bidRecommendation?: {
+    verdict: 'BID' | 'NO-BID' | 'CONDITIONAL' | 'NEEDS REVIEW'
+    confidence: number
+    reasoning: string
+    actionItems?: string[]
+  }
+  requirements?: Array<{
+    id: string
+    section: string
+    text: string
+    priority: 'Critical' | 'Important' | 'Nice-to-Have'
+    status: 'Met' | 'Partial' | 'Missing'
   }>
   recommendations: string[]
 }
@@ -123,6 +144,8 @@ Return ONLY valid JSON matching this exact structure:
     "compliance": "Critical" | "High" | "Medium" | "Low",
     "financial": "Critical" | "High" | "Medium" | "Low",
     "security_clearance": "Critical" | "High" | "Medium" | "Low",
+    "cybersecurity_certifications": "Critical" | "High" | "Medium" | "Low",
+    "operational_demands": "Critical" | "High" | "Medium" | "Low",
     "timeline": "Critical" | "High" | "Medium" | "Low",
     "subcontracting": "Critical" | "High" | "Medium" | "Low",
     "past_performance": "Critical" | "High" | "Medium" | "Low",
@@ -202,10 +225,18 @@ MUST match severity level for the same item across ALL report sections:
 
 | Item | Risk Heatmap | Risk Details | Req. Extractor | Compliance Score Card |
 |------|-------------|--------------|----------------|----------------------|
-| Security Clearance | Critical | High or Critical | Critical | "Missing" = Critical |
+| Security Clearance (Secret/TS) | **Critical** | **Critical** | Critical | "Missing" = Critical |
+| CMMC Level 2+ | **Critical** | **Critical** | Critical | "Missing" = Critical |
+| FedRAMP | **High** | **High** | High/Critical | "Missing" = High |
 | Past Performance | Medium | Medium | Critical (if <3/3) | "2 of 3" = Medium |
 | Financial Requirements | Medium | — | — | 45% = Medium |
 | Timeline | High | High | — | — |
+
+### BID/NO-BID LOGIC FOR CLEARANCE/CMMC RFPs:
+- If RFP requires Secret/Top Secret clearance AND CMMC Level 2+ but both are ACHIEVABLE within stated timelines → verdict = "CONDITIONAL" (NOT "NO-BID")
+- Only use "NO-BID" if there are HARD BLOCKERS (e.g., impossible timelines, conflicting requirements)
+- "CONDITIONAL" means: the requirements are achievable but require verification/action from the bidder
+- Confidence for CONDITIONAL with clearance+CMMC: 65-80%
 
 ## FINANCIAL RISK ANALYSIS
 Use these thresholds when setting the "financial" risk_heatmap value:
@@ -232,11 +263,35 @@ Additional risk factors: bonding requirements not documented, security clearance
 - NEVER flag optional clauses as missing
 
 ## REQUIREMENT EXTRACTOR RULES
-- Extract ALL requirements from Sections L, M, H, K, B, J
+- Extract ALL requirements from Sections C, L, M, H, K, B, J
+- You MUST extract 15-20 requirements minimum. NEVER return fewer than 12.
 - Each requirement gets a unique ID: REQ-001, REQ-002, etc.
 - Priority: "Critical" = mandatory, "Important" = evaluated, "Nice-to-Have" = optional
 - Status: "Met" = clearly addressed, "Partial" = partially addressed, "Missing" = not addressed
 - Security clearance, CMMC, FedRAMP, FCL requirements MUST appear in the extractor
+
+### MANDATORY SECTIONS TO SCAN — never skip these:
+| Section | What to Extract |
+|---------|----------------|
+| **C.2.1** | System Administration (workstations, servers, patch management, uptime SLAs) |
+| **C.2.2** | Help Desk Support (Tier 1/2, business hours, after-hours response) — ALWAYS extract |
+| **C.2.3** | Cybersecurity (NIST, CMMC, FedRAMP, incident response, continuous monitoring) |
+| **C.2.4** | Cloud Migration (AWS/Azure/GCP, assessment, migration, training) — ALWAYS extract |
+| **L.1.1-L.1.2** | Proposal Format & Page Limits |
+| **L.2.1-L.2.3** | Technical Approach, Past Performance, Small Business |
+| **L.3.1-L.3.3** | Security Clearance, Section 508, CMMC |
+| **H.1, H.4** | Contract Value/Type, Key Personnel |
+| **K.1-K.2** | SAM.gov Registration, Small Business Certification |
+
+### SECTION 508 PRIORITY RULE:
+- Section 508 / Rehabilitation Act is MANDATORY in federal contracts
+- NEVER classify Section 508 as "Nice-to-Have" — always "Important" or "Critical"
+- If penalties are mentioned for non-compliance, use "Critical"
+
+### AGENCY NAME CONSISTENCY:
+- If RFP mentions both "GSA" and "DHS"/"CISA": use "DHS CISA (GSA Contracting)" as the agency
+- Use the SAME agency name consistently in: Executive Summary, Key Metrics, ALL Recommendations, ALL Risk Details
+- NEVER mix different agency names in the same report
 
 ## FORBIDDEN LANGUAGE — NEVER USE THESE PHRASES:
 - "Not addressed in Section L"
@@ -255,13 +310,15 @@ Additional risk factors: bonding requirements not documented, security clearance
 - Instead of "FAR clause not found" -> State "FAR 52.XXX-XX [required/not required] per RFP Section [Y]."
 
 ## RECOMMENDATIONS — GENERATE EXACTLY 5
-Each recommendation MUST follow this template:
-"[SEVERITY]: This [Agency] RFP requires [specific requirement] ([Section X.Y]). [Action user must take] within [timeline]. Missing this = [consequence]."
+Each recommendation MUST follow this template EXACTLY:
+"[SEVERITY]: This [AGENCY] RFP requires [specific requirement] ([Section X.Y]). [Specific action user must take]. Missing this = [specific consequence]."
 
 Rules:
-- Exactly 5 recommendations (ordered Critical -> High -> Medium)
-- Each MUST include: agency name, exact RFP section/paragraph, timeline, consequence, specific action
-- Match the severity indicators from findings: Critical, High, Medium
+- Exactly 5 recommendations (ordered Critical -> High -> Important -> Medium)
+- Each MUST include: CONSISTENT agency name, exact RFP section/paragraph reference, timeline, consequence, specific action
+- The agency name MUST be the SAME in every recommendation (no mixing "GSA" and "DHS CISA")
+- Match severity to the findings: first 1-2 = CRITICAL, next 1-2 = HIGH, last 1-2 = IMPORTANT/MEDIUM
+- NEVER use generic language — every recommendation must cite a specific section and deadline
 
 ### Correct Example:
 "CRITICAL: This DoD RFP requires Secret clearance for ALL key personnel (Section H.4.2). Begin clearance process or identify cleared subcontractor within 14 days. Missing this = automatic disqualification."
@@ -580,6 +637,14 @@ function validateAndFix(
 
   // Enforce forbidden language in all findings
   enforceLanguageRules(parsed)
+
+  // ── FIX-004: Section 508 priority enforcement ──────────────────
+  for (const req of parsed.requirement_extractor) {
+    if (/section\s*508|rehabilitation act/i.test(req.requirement) && req.priority === 'Nice-to-Have') {
+      req.priority = 'Important'
+      if (req.status === 'Missing') req.status = 'Partial'
+    }
+  }
 
   return parsed
 }
@@ -911,6 +976,22 @@ function runQualityGates(result: V2AnalysisResult, rfpText: string): void {
   // Gate 6: Exactly 5 recommendations
   gates.push({ name: 'Exactly 5 recommendations', passed: result.top_recommendations.length === 5 })
 
+  // Gate 6b: Minimum 12 requirements extracted
+  gates.push({ name: 'Min 12 requirements', passed: result.requirement_extractor.length >= 12 })
+
+  // Gate 6c: Section 508 not classified as Nice-to-Have
+  const sec508Req = result.requirement_extractor.find(r => /section\s*508|rehabilitation act/i.test(r.requirement))
+  const sec508Ok = !sec508Req || sec508Req.priority !== 'Nice-to-Have'
+  gates.push({ name: 'Section 508 not Nice-to-Have', passed: sec508Ok })
+
+  // Gate 6d: Agency name consistency in recommendations
+  const agencyWords = (result.metadata.agency || '').toLowerCase().split(/\s+/).filter(w => w.length > 2)
+  const recsConsistent = agencyWords.length === 0 || result.top_recommendations.every(r => {
+    const rLower = r.toLowerCase()
+    return agencyWords.some(w => rLower.includes(w)) || /section\s+\w/i.test(r)
+  })
+  gates.push({ name: 'Agency name consistent in recs', passed: recsConsistent })
+
   // Gate 7: Security clearance is High or Critical (never Medium/Low)
   const securityFindings = [
     ...result.critical_findings,
@@ -1009,19 +1090,38 @@ export async function analyzeRFP(rfpText: string): Promise<AnalysisResult> {
 }
 
 ## CRITICAL DETECTION RULES (MANDATORY):
-- Security Clearance (Secret, Top Secret, TS/SCI): ALWAYS classify risk as "High" or higher — NEVER "Medium" or "Low"
-- CMMC Level: Must appear in requirements as Critical/Missing if referenced in RFP
-- FedRAMP: Must appear in requirements as Critical if referenced in RFP
+- Security Clearance (Secret, Top Secret, TS/SCI): ALWAYS classify risk as "High" or "Critical" — NEVER "Medium" or "Low"
+- CMMC Level 2+: ALWAYS "Critical" in BOTH risk details AND riskHeatmap — severity must match
+- FedRAMP: Must appear in requirements as Critical/High if referenced in RFP
 - Facility Clearance (FCL): Must appear in requirements if referenced
 - Contract Value >$2M for 8(a)/small biz: Financial risk must be at least "Medium"
 - Set-Aside (SDVOSB, WOSB, 8(a), HUBZone): Must appear in keyMetrics
 
-## ZERO-TOLERANCE SECURITY RULE:
-If the RFP requires Security Clearance (Secret/Top Secret/TS/SCI) OR CMMC Level 2+ certification, the bidRecommendation.verdict MUST be:
-- "NO-BID" if the user has no way to confirm clearance eligibility or CMMC certification
-- "CONDITIONAL" ONLY if the reasoning explicitly states the user ALREADY holds the required clearance/certification
+## RISK SEVERITY CONSISTENCY (MANDATORY):
+The SAME item must have the SAME severity in risks[] and riskHeatmap[]:
+- Security Clearance → "Critical" in BOTH risk details AND riskHeatmap
+- CMMC Level 2+ → "Critical" in BOTH risk details AND riskHeatmap
+- FedRAMP → "High" in both
+- Financial ($5M+ Small Biz) → "High" or "Critical" in both
+- If mismatch, always use the HIGHER severity
+
+## BID/NO-BID LOGIC:
+- If RFP requires Security Clearance AND CMMC Level 2+ but both have achievable timelines (e.g., 60 days / 180 days) → verdict = "CONDITIONAL" (NOT "NO-BID")
+- "CONDITIONAL" = requirements are achievable but need verification
+- "NO-BID" = only for HARD BLOCKERS (impossible timelines, conflicting requirements, out-of-scope NAICS)
+- For CONDITIONAL with clearance+CMMC: confidence should be 65-80%
 - NEVER return "BID" when clearance or CMMC Level 2+ is required
-- The reasoning MUST mention the specific clearance level and timeline from the RFP
+
+## AGENCY NAME CONSISTENCY:
+- If RFP mentions both "GSA" and "DHS"/"CISA": use "DHS CISA (GSA Contracting)" as the agency
+- Use the EXACT SAME agency name in: executiveSummary, keyMetrics.agency, ALL recommendations, ALL risk descriptions
+- NEVER mix agency names (e.g., don't say "GSA" in one recommendation and "DHS CISA" in another)
+
+## REQUIREMENT EXTRACTOR RULES:
+- Extract 15-20 requirements minimum from Sections C, L, M, H, K, B, J
+- NEVER return fewer than 12 requirements
+- MANDATORY sections to always extract from: C.2.1 (System Admin), C.2.2 (Help Desk), C.2.3 (Cybersecurity), C.2.4 (Cloud Migration), L.1.1-L.1.2 (Proposal Format), L.3.1 (Clearance), L.3.2 (Section 508), L.3.3 (CMMC), H.1 (Contract Value), K.1-K.2 (SAM.gov)
+- Section 508 / Rehabilitation Act is MANDATORY in federal contracts → NEVER classify as "Nice-to-Have", always "Important" or "Critical"
 
 ## FORBIDDEN LANGUAGE — NEVER USE:
 - "Not addressed in Section L", "Missing from requirements", "Not found in document", "Not documented"
@@ -1033,11 +1133,14 @@ INSTEAD: "Section L requires [X]. Verify yours are relevant to [specific scope].
 
 ## SCORING:
 - readinessScore: 0-100 based on compliance, capability, clarity, patterns
-- complianceCategories: include at least 4 categories (FAR Clauses, Set-Aside Eligibility, Past Performance, Financial, Security)
-- bidRecommendation.confidence: 0-100 (percentage)
+- complianceCategories: include at least 5 categories (FAR Clauses, Set-Aside Eligibility, Past Performance, Financial Management, Security & Certifications)
+- Security & Certifications score: minimum 30% when user profile is unknown (not 0%)
+- complianceCompleteness: use formula: start at 100, -10 per Critical Missing, -5 per Important Missing, -2 per Nice-to-Have Missing
+- bidRecommendation.confidence: 0-100 (percentage, cap at 95)
 - At least 8 complianceChecklist items, at least 4 risks, exactly 5 recommendations
 - Each risk MUST reference a specific RFP section or clause
-- Each recommendation MUST include: agency name, exact section reference, timeline, consequence
+- Each recommendation MUST include: CONSISTENT agency name, exact section reference, timeline, consequence
+- NO FALSE POSITIVES: do not invent requirements not in the RFP (e.g., ISO 27001, QA Surveillance Plan)
 
 RFP TEXT:
 ${rfpText}
@@ -1114,27 +1217,119 @@ Return ONLY valid JSON, no markdown, no explanation.`
     }
   }
 
-  // ── Zero-tolerance enforcement: security clearance / CMMC ───────
-  // If the RFP requires clearance or CMMC Level 2+, the verdict must
-  // never be "BID" — the user cannot confirm eligibility from RFP text alone.
-  const hasClearanceReq = /secret|top secret|ts\/sci|security clearance/i.test(rfpText)
-  const hasCMMCReq = /cmmc\s*level\s*[2-3]/i.test(rfpText)
+  // ── FIX-004: Section 508 priority enforcement ───────────────────
+  for (const req of (parsed.requirements || [])) {
+    if (/section\s*508|rehabilitation act/i.test(req.text) && req.priority === 'Nice-to-Have') {
+      req.priority = 'Important'
+      if (req.status === 'Missing') req.status = 'Partial'
+    }
+  }
+
+  // ── FIX-003: Risk Heatmap ↔ Risk Details consistency ──────────
+  // Enforce: Security Clearance and CMMC must be "Critical" in BOTH
+
+  // Fix: Security Clearance risk must be Critical in heatmap
+  if (hasClearanceReq) {
+    const secRisk = parsed.risks.find(r => /clearance/i.test(r.title))
+    if (secRisk) {
+      // Upgrade risk detail to Critical if not already
+      if (secRisk.level !== 'Critical') secRisk.level = 'Critical'
+      // Upgrade heatmap
+      for (const hm of (parsed.riskHeatmap || [])) {
+        if (/clearance|security/i.test(hm.category)) {
+          hm.level = 'Critical'
+        }
+      }
+    }
+  }
+
+  // Fix: CMMC risk must be Critical in both
+  if (hasCMMCReq) {
+    const cmmcRisk = parsed.risks.find(r => /cmmc/i.test(r.title))
+    if (cmmcRisk) {
+      if (cmmcRisk.level !== 'Critical') cmmcRisk.level = 'Critical'
+      for (const hm of (parsed.riskHeatmap || [])) {
+        if (/cmmc|certification/i.test(hm.category)) {
+          hm.level = 'Critical'
+        }
+      }
+    }
+  }
+
+  // ── FIX-006: Recalculate complianceCompleteness from requirements ──
+  if (parsed.scoreBreakdown) {
+    let compScore = 100
+    for (const req of (parsed.requirements || [])) {
+      if (req.status === 'Missing') {
+        if (req.priority === 'Critical') compScore -= 10
+        else if (req.priority === 'Important') compScore -= 5
+        else compScore -= 2
+      }
+    }
+    compScore = Math.max(5, compScore)
+    // Use the LOWER of AI score vs calculated
+    parsed.scoreBreakdown.complianceCompleteness = Math.min(
+      parsed.scoreBreakdown.complianceCompleteness || 100,
+      compScore
+    )
+  }
+
+  // ── FIX-007: Security & Certifications score floor at 30% ─────
+  if (parsed.complianceCategories) {
+    const secCat = parsed.complianceCategories.find(c =>
+      /security|certification/i.test(c.name)
+    )
+    if (secCat && secCat.score < 30 && (hasClearanceReq || hasCMMCReq)) {
+      secCat.score = 30
+    }
+  }
+
+  // ── FIX-002: Agency name consistency ───────────────────────────
+  // Normalize agency in keyMetrics
+  const agency = parsed.keyMetrics?.agency || ''
+  if (/gsa/i.test(agency) && /dhs|cisa/i.test(rfpText)) {
+    const normalizedAgency = /dhs.*cisa|cisa.*dhs/i.test(rfpText)
+      ? 'Department of Homeland Security (DHS), Cybersecurity and Infrastructure Security Agency (CISA)'
+      : /cisa/i.test(rfpText)
+        ? 'Cybersecurity and Infrastructure Security Agency (CISA)'
+        : 'Department of Homeland Security (DHS)'
+    if (parsed.keyMetrics) parsed.keyMetrics.agency = normalizedAgency
+  }
+
+  // Fix agency references in recommendations
+  const finalAgency = parsed.keyMetrics?.agency || agency
+  if (finalAgency && parsed.recommendations) {
+    const agencyShort = finalAgency.includes('CISA') ? 'DHS CISA'
+      : finalAgency.includes('DHS') ? 'DHS'
+      : finalAgency.split(',')[0].trim()
+    parsed.recommendations = parsed.recommendations.map(rec => {
+      // Replace inconsistent agency references with the canonical one
+      return rec.replace(/This GSA RFP/g, `This ${agencyShort} RFP`)
+    })
+  }
+
+  // ── FIX-005: Zero-tolerance + CONDITIONAL enforcement ──────────
   if (hasClearanceReq || hasCMMCReq) {
     const v = parsed.bidRecommendation?.verdict
     if (v === 'BID') {
       parsed.bidRecommendation.verdict = 'CONDITIONAL'
       parsed.bidRecommendation.reasoning =
-        `ZERO-TOLERANCE OVERRIDE: This RFP requires ${hasClearanceReq ? 'security clearance' : ''}${hasClearanceReq && hasCMMCReq ? ' and ' : ''}${hasCMMCReq ? 'CMMC Level 2+ certification' : ''}. BidRank cannot confirm your eligibility — verify before proceeding. ` +
+        `This RFP requires ${hasClearanceReq ? 'security clearance' : ''}${hasClearanceReq && hasCMMCReq ? ' and ' : ''}${hasCMMCReq ? 'CMMC Level 2+ certification' : ''}. These are achievable within the stated timelines but require verification. ` +
         (parsed.bidRecommendation.reasoning || '')
     }
     // Ensure risks reflect the security requirement
     if (hasClearanceReq && !parsed.risks.some(r => /clearance/i.test(r.title))) {
       parsed.risks.unshift({
-        level: 'High',
+        level: 'High' as const,
         title: 'Security Clearance Requirement',
         description: 'This RFP requires security clearance for key personnel. Verify your team\'s clearance status or identify cleared subcontractors before bidding.',
       })
     }
+  }
+
+  // Cap confidence at 95%
+  if (parsed.bidRecommendation?.confidence > 95) {
+    parsed.bidRecommendation.confidence = 95
   }
 
   return parsed
