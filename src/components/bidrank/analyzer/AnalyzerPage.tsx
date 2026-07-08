@@ -313,7 +313,18 @@ function exportToPdf(r: ApiResult) {
   .rec-list{padding-left:20px}
   .rec-list li{margin:6px 0;font-size:13px}
   .footer{margin-top:40px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center}
-  @media print{body{padding:20px}}
+  @media print{
+    body{padding:20px}
+    @page{
+      size:auto;
+      margin:15mm;
+      @bottom-center{
+        content:"Page " counter(page) " of " counter(pages);
+        font-size:10px;
+        color:#94a3b8;
+      }
+    }
+  }
 </style></head><body>
 <h1>BidRank RFP Analysis Report</h1>
 <p class="subtitle">Generated on ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>

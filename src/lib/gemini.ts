@@ -1052,11 +1052,29 @@ Return ONLY valid JSON, no markdown, no explanation.`
 
   parsed.readinessScore = Math.max(0, Math.min(100, Math.round(parsed.readinessScore || 0)))
 
+  // ── Fix raw ISO dates in keyMetrics ──────────────────────────────
+  if (parsed.keyMetrics?.submissionDeadline) {
+    const d = parsed.keyMetrics.submissionDeadline
+    const isoMatch = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})/.test(d)
+    if (isoMatch) {
+      try {
+        const parsed_d = new Date(d)
+        if (!isNaN(parsed_d.getTime())) {
+          parsed.keyMetrics.submissionDeadline = parsed_d.toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+          })
+        }
+      } catch { /* keep original */ }
+    }
+  }
+
   if (!parsed.risks || parsed.risks.length === 0) parsed.risks = []
   if (!parsed.complianceChecklist || parsed.complianceChecklist.length === 0) parsed.complianceChecklist = []
   if (!parsed.recommendations || parsed.recommendations.length === 0) parsed.recommendations = []
 
   // ── Build riskHeatmap from risks if AI didn't return it ──────────
+  const standardCategories = ['Security Clearance', 'Technical Requirements', 'Compliance', 'Financial', 'Timeline', 'Past Performance', 'Personnel', 'Subcontracting']
   if (!parsed.riskHeatmap || parsed.riskHeatmap.length === 0) {
     const riskToCategory = (title: string): string => {
       const t = title.toLowerCase()
@@ -1081,10 +1099,16 @@ Return ONLY valid JSON, no markdown, no explanation.`
       }
     }
     parsed.riskHeatmap = Object.entries(categoryLevels).map(([category, level]) => ({ category, level }))
-    // Ensure at least 8 standard categories
-    const standards = ['Security Clearance', 'Technical Requirements', 'Compliance', 'Financial', 'Timeline', 'Past Performance', 'Personnel', 'Subcontracting']
-    for (const s of standards) {
+    for (const s of standardCategories) {
       if (!categoryLevels[s]) {
+        parsed.riskHeatmap.push({ category: s, level: 'Low' })
+      }
+    }
+  } else {
+    // AI returned some categories — merge with any missing standards
+    const existingCats = new Set(parsed.riskHeatmap.map(h => h.category.toLowerCase()))
+    for (const s of standardCategories) {
+      if (!existingCats.has(s.toLowerCase())) {
         parsed.riskHeatmap.push({ category: s, level: 'Low' })
       }
     }
