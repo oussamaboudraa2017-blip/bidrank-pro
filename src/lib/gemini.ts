@@ -752,48 +752,62 @@ function validateAndFix(
   }
 
   // ── P1: Ensure every heatmap category has at least one finding ──
-  const heatmapToFinding: Record<string, { severity: SeverityLevel; finding: string; source: string; action: string; consequence: string }> = {
-    compliance: { severity: 'HIGH', finding: 'FAR clause and regulatory compliance requirements', source: 'Section L and K', action: 'Verify all applicable FAR clauses are addressed in the proposal', consequence: 'missing clauses result in proposal rejection' },
-    operational_demands: { severity: 'HIGH', finding: 'Operational performance and SLA compliance demands', source: 'Section C', action: 'Document operational capabilities and SLA attainment strategy', consequence: 'failure to meet SLAs results in performance penalties' },
-    timeline: { severity: 'MEDIUM', finding: 'Proposal submission timeline constraints', source: 'Section L', action: 'Begin proposal preparation immediately to meet submission deadline', consequence: 'late submissions are automatically disqualified' },
-    past_performance: { severity: 'MEDIUM', finding: 'Past performance documentation requirements', source: 'Section L.2.2', action: 'Compile 3-5 relevant past performance references with POC contact information', consequence: 'insufficient or irrelevant references lower evaluation score' },
-    personnel: { severity: 'MEDIUM', finding: 'Key personnel staffing and qualification requirements', source: 'Section H.4', action: 'Identify qualified personnel meeting all experience and clearance requirements', consequence: 'unqualified personnel result in key positions being unfilled' },
-    subcontracting: { severity: 'LOW', finding: 'Small business subcontracting plan requirements', source: 'Section L.2.3 and FAR 52.219-9', action: 'Develop subcontracting plan with achievable goals for required categories', consequence: 'missing or inadequate plan results in evaluation deduction' },
-    technical_requirements: { severity: 'LOW', finding: 'Technical approach and capability demonstration', source: 'Section L.2.1 and C', action: 'Develop detailed technical approach addressing all SOW requirements', consequence: 'weak technical approach significantly lowers evaluation score' },
-  }
+  // Use keyword-based matching since AI-generated heatmap keys vary
+  const heatmapKeywords: Array<{
+    keywords: string[]
+    severity: SeverityLevel
+    finding: string
+    source: string
+    action: string
+    consequence: string
+  }> = [
+    { keywords: ['compliance', 'policy', 'far', 'regulation'], severity: 'HIGH', finding: 'FAR clause and regulatory compliance requirements', source: 'Section L and K', action: 'Verify all applicable FAR clauses are addressed in the proposal', consequence: 'missing clauses result in proposal rejection' },
+    { keywords: ['operational', 'sla', 'performance', 'cloud service'], severity: 'HIGH', finding: 'Operational performance and SLA compliance demands', source: 'Section C', action: 'Document operational capabilities and SLA attainment strategy', consequence: 'failure to meet SLAs results in performance penalties' },
+    { keywords: ['timeline', 'deadline', 'proposal submission'], severity: 'MEDIUM', finding: 'Proposal submission timeline constraints', source: 'Section L', action: 'Begin proposal preparation immediately to meet submission deadline', consequence: 'late submissions are automatically disqualified' },
+    { keywords: ['past performance', 'reference'], severity: 'MEDIUM', finding: 'Past performance documentation requirements', source: 'Section L.2.2', action: 'Compile 3-5 relevant past performance references with POC contact information', consequence: 'insufficient or irrelevant references lower evaluation score' },
+    { keywords: ['personnel', 'staffing'], severity: 'MEDIUM', finding: 'Key personnel staffing and qualification requirements', source: 'Section H.4', action: 'Identify qualified personnel meeting all experience and clearance requirements', consequence: 'unqualified personnel result in key positions being unfilled' },
+    { keywords: ['subcontracting', 'small business'], severity: 'LOW', finding: 'Small business subcontracting plan requirements', source: 'Section L.2.3 and FAR 52.219-9', action: 'Develop subcontracting plan with achievable goals for required categories', consequence: 'missing or inadequate plan results in evaluation deduction' },
+    { keywords: ['technical'], severity: 'LOW', finding: 'Technical approach and capability demonstration', source: 'Section L.2.1 and C', action: 'Develop detailed technical approach addressing all SOW requirements', consequence: 'weak technical approach significantly lowers evaluation score' },
+  ]
 
-  for (const [heatmapKey, defaultFinding] of Object.entries(heatmapToFinding)) {
+  for (const entry of heatmapKeywords) {
+    // Find matching heatmap categories (fuzzy/keyword match)
+    const matchingHeatmapKeys = Object.keys(parsed.risk_heatmap).filter(hk =>
+      entry.keywords.some(kw => hk.toLowerCase().includes(kw))
+    )
+    if (matchingHeatmapKeys.length === 0) continue
+
+    // Get the highest severity among matching heatmap categories
+    const maxLevel = matchingHeatmapKeys.reduce(
+      (max, k) => {
+        const v = parsed.risk_heatmap[k as keyof typeof parsed.risk_heatmap]
+        return (severityOrder[v] ?? 0) > (severityOrder[max] ?? 0) ? v : max
+      },
+      'Low' as string
+    )
+    if (maxLevel === 'Low') continue
+
     // Check if any existing finding covers this category
     const hasCoverage = allFindings.some(f => {
       const t = f.finding.toLowerCase()
-      if (heatmapKey === 'compliance') return /far|clause|regulation|sam\.gov/i.test(t)
-      if (heatmapKey === 'operational_demands') return /sla|uptime|response time|performance metric|operational/i.test(t)
-      if (heatmapKey === 'timeline') return /timeline|deadline|submission|schedule/i.test(t)
-      if (heatmapKey === 'past_performance') return /past performance|reference|contract history/i.test(t)
-      if (heatmapKey === 'personnel') return /personnel|staff|key personnel|resume/i.test(t)
-      if (heatmapKey === 'subcontracting') return /subcontract|small business plan/i.test(t)
-      if (heatmapKey === 'technical_requirements') return /technical approach|technical requirement|capability/i.test(t)
-      return false
+      return entry.keywords.some(kw => t.includes(kw))
     })
 
     if (!hasCoverage) {
-      const level = parsed.risk_heatmap[heatmapKey as keyof typeof parsed.risk_heatmap]
-      if (level && level !== 'Low') {
-        // Only add findings for non-Low heatmap categories
-        const targetArray = defaultFinding.severity === 'CRITICAL' ? parsed.critical_findings
-          : defaultFinding.severity === 'HIGH' ? parsed.high_findings
-          : defaultFinding.severity === 'MEDIUM' ? parsed.medium_findings
-          : parsed.low_findings
-        targetArray.push({
-          severity: defaultFinding.severity,
-          indicator: SEVERITY_INDICATORS[defaultFinding.severity],
-          finding: defaultFinding.finding,
-          source: defaultFinding.source,
-          timeline: 'Per RFP timeline',
-          consequence: defaultFinding.consequence,
-          action: defaultFinding.action,
-        })
-      }
+      const targetSeverity = maxLevel === 'Critical' ? 'CRITICAL'
+        : maxLevel === 'High' ? 'HIGH' : 'MEDIUM'
+      const targetArray = targetSeverity === 'CRITICAL' ? parsed.critical_findings
+        : targetSeverity === 'HIGH' ? parsed.high_findings
+        : parsed.medium_findings
+      targetArray.push({
+        severity: targetSeverity,
+        indicator: SEVERITY_INDICATORS[targetSeverity],
+        finding: entry.finding,
+        source: entry.source,
+        timeline: 'Per RFP timeline',
+        consequence: entry.consequence,
+        action: entry.action,
+      })
     }
   }
 
@@ -996,7 +1010,7 @@ const MANDATORY_SECTIONS: Array<{
   { sectionRe: /lead\s*(system|sys)\s*admin|system\s*administrator/i, section: 'H.4', description: 'Lead Systems Administrator (full-time, 5 years experience)', priority: 'Critical' },
   { sectionRe: /cybersecurity\s*(specialist|analyst|lead|0\.5\s*FTE)|information\s*security/i, section: 'H.4', description: 'Cybersecurity Specialist (0.5 FTE minimum, security certifications)', priority: 'Important' },
   { sectionRe: /K\.?\s*[12]|SAM\.gov|small\s*business\s*cert/i, section: 'K', description: 'SAM.gov registration and small business certification', priority: 'Critical' },
-  { sectionRe: /FCL|facility\s*(security\s*)?clearance/i, section: 'L.3.1', description: 'Facility Clearance (FCL) — verify if required for this contract', priority: 'Important' },
+  { sectionRe: /FCL|facility\s*(security\s*)?clearance/i, section: 'L.3.1-FCL', description: 'Facility Clearance (FCL) — verify if required for this contract', priority: 'Important' },
 ]
 
 // Patterns that indicate a requirement is likely a false positive
@@ -1714,28 +1728,41 @@ Return ONLY valid JSON, no markdown, no explanation.`
   }
 
   // ── P1 Legacy: Ensure every heatmap category has a risk detail ─
-  const heatmapCats = new Set((parsed.riskHeatmap || []).map(h => h.category.toLowerCase()))
+  // Use keyword-based matching since AI-generated category names vary
   const riskTitles = new Set((parsed.risks || []).map(r => r.title.toLowerCase()))
-  const legacyDefaultRisks: Array<{ category: string; level: string; title: string; desc: string }> = [
-    { category: 'compliance', level: 'High', title: 'FAR and Regulatory Compliance', desc: 'The proposal must address all applicable FAR clauses referenced in the solicitation. Verify compliance with SAM.gov registration, offeror representations, and any contract-specific flowdown clauses.' },
-    { category: 'proposal submission', level: 'Medium', title: 'Proposal Submission Requirements', desc: 'The RFP specifies format, page limits, and submission requirements. Ensure all volumes are complete, properly formatted, and submitted before the deadline.' },
-    { category: 'technical requirements', level: 'Medium', title: 'Technical Capability Demonstration', desc: 'The technical approach must demonstrate capability to meet all SOW requirements. Address evaluation criteria weighting and provide specific methodology details.' },
-    { category: 'timeline', level: 'Medium', title: 'Proposal Timeline and Deadline', desc: 'The submission timeline must be managed carefully. Late submissions are automatically disqualified per FAR regulations.' },
-    { category: 'past performance', level: 'Medium', title: 'Past Performance Documentation', desc: 'Compile relevant past performance references meeting the RFP requirements for recency, scope, and documentation.' },
-    { category: 'personnel', level: 'Medium', title: 'Key Personnel Qualifications', desc: 'Verify proposed personnel meet all experience, certification, and clearance requirements specified in the solicitation.' },
-    { category: 'subcontracting', level: 'Low', title: 'Subcontracting Plan Requirements', desc: 'If required, develop a comprehensive subcontracting plan with achievable goals for required small business categories.' },
+  const legacyDefaultRisks: Array<{ keywords: string[]; title: string; desc: string }> = [
+    { keywords: ['compliance', 'policy', 'far', 'regulation'], title: 'FAR and Regulatory Compliance', desc: 'The proposal must address all applicable FAR clauses referenced in the solicitation. Verify compliance with SAM.gov registration, offeror representations, and any contract-specific flowdown clauses.' },
+    { keywords: ['proposal submission', 'format'], title: 'Proposal Submission Requirements', desc: 'The RFP specifies format, page limits, and submission requirements. Ensure all volumes are complete, properly formatted, and submitted before the deadline.' },
+    { keywords: ['technical'], title: 'Technical Capability Demonstration', desc: 'The technical approach must demonstrate capability to meet all SOW requirements. Address evaluation criteria weighting and provide specific methodology details.' },
+    { keywords: ['timeline', 'deadline'], title: 'Proposal Timeline and Deadline', desc: 'The submission timeline must be managed carefully. Late submissions are automatically disqualified per FAR regulations.' },
+    { keywords: ['past performance', 'reference'], title: 'Past Performance Documentation', desc: 'Compile relevant past performance references meeting the RFP requirements for recency, scope, and documentation.' },
+    { keywords: ['personnel', 'staffing'], title: 'Key Personnel Qualifications', desc: 'Verify proposed personnel meet all experience, certification, and clearance requirements specified in the solicitation.' },
+    { keywords: ['subcontracting'], title: 'Subcontracting Plan Requirements', desc: 'If required, develop a comprehensive subcontracting plan with achievable goals for required small business categories.' },
   ]
   for (const dr of legacyDefaultRisks) {
-    if (heatmapCats.has(dr.category) && !riskTitles.has(dr.title.toLowerCase())) {
-      const hmLevel = (parsed.riskHeatmap || []).find(h => h.category.toLowerCase() === dr.category)?.level
-      if (hmLevel && hmLevel !== 'Low') {
-        parsed.risks.push({
-          level: hmLevel as 'High' | 'Medium' | 'Low' | 'Critical',
-          title: dr.title,
-          description: dr.desc,
-        })
-      }
-    }
+    // Find matching heatmap categories using keyword substring match
+    const matching = (parsed.riskHeatmap || []).filter(h =>
+      dr.keywords.some(kw => h.category.toLowerCase().includes(kw)) && h.level !== 'Low'
+    )
+    if (matching.length === 0) continue
+
+    // Check if any existing risk covers this topic
+    const hasCoverage = (parsed.risks || []).some(r =>
+      dr.keywords.some(kw => r.title.toLowerCase().includes(kw))
+    )
+    if (hasCoverage) continue
+
+    // Use the highest severity from matching heatmap entries
+    const sevOrder: Record<string, number> = { Low: 0, Medium: 1, High: 2, Critical: 3 }
+    const maxLevel = matching.reduce(
+      (max, h) => (sevOrder[h.level] ?? 0) > (sevOrder[max] ?? 0) ? h.level : max,
+      'Low' as string
+    )
+    parsed.risks.push({
+      level: maxLevel as 'High' | 'Medium' | 'Low' | 'Critical',
+      title: dr.title,
+      description: dr.desc,
+    })
   }
 
   // ── P1 Legacy: Change "Partial" to "Missing" for unknown profile ─
