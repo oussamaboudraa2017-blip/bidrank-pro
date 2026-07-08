@@ -751,6 +751,52 @@ function validateAndFix(
     }
   }
 
+  // ── P1: Ensure every heatmap category has at least one finding ──
+  const heatmapToFinding: Record<string, { severity: SeverityLevel; finding: string; source: string; action: string; consequence: string }> = {
+    compliance: { severity: 'HIGH', finding: 'FAR clause and regulatory compliance requirements', source: 'Section L and K', action: 'Verify all applicable FAR clauses are addressed in the proposal', consequence: 'missing clauses result in proposal rejection' },
+    operational_demands: { severity: 'HIGH', finding: 'Operational performance and SLA compliance demands', source: 'Section C', action: 'Document operational capabilities and SLA attainment strategy', consequence: 'failure to meet SLAs results in performance penalties' },
+    timeline: { severity: 'MEDIUM', finding: 'Proposal submission timeline constraints', source: 'Section L', action: 'Begin proposal preparation immediately to meet submission deadline', consequence: 'late submissions are automatically disqualified' },
+    past_performance: { severity: 'MEDIUM', finding: 'Past performance documentation requirements', source: 'Section L.2.2', action: 'Compile 3-5 relevant past performance references with POC contact information', consequence: 'insufficient or irrelevant references lower evaluation score' },
+    personnel: { severity: 'MEDIUM', finding: 'Key personnel staffing and qualification requirements', source: 'Section H.4', action: 'Identify qualified personnel meeting all experience and clearance requirements', consequence: 'unqualified personnel result in key positions being unfilled' },
+    subcontracting: { severity: 'LOW', finding: 'Small business subcontracting plan requirements', source: 'Section L.2.3 and FAR 52.219-9', action: 'Develop subcontracting plan with achievable goals for required categories', consequence: 'missing or inadequate plan results in evaluation deduction' },
+    technical_requirements: { severity: 'LOW', finding: 'Technical approach and capability demonstration', source: 'Section L.2.1 and C', action: 'Develop detailed technical approach addressing all SOW requirements', consequence: 'weak technical approach significantly lowers evaluation score' },
+  }
+
+  for (const [heatmapKey, defaultFinding] of Object.entries(heatmapToFinding)) {
+    // Check if any existing finding covers this category
+    const hasCoverage = allFindings.some(f => {
+      const t = f.finding.toLowerCase()
+      if (heatmapKey === 'compliance') return /far|clause|regulation|sam\.gov/i.test(t)
+      if (heatmapKey === 'operational_demands') return /sla|uptime|response time|performance metric|operational/i.test(t)
+      if (heatmapKey === 'timeline') return /timeline|deadline|submission|schedule/i.test(t)
+      if (heatmapKey === 'past_performance') return /past performance|reference|contract history/i.test(t)
+      if (heatmapKey === 'personnel') return /personnel|staff|key personnel|resume/i.test(t)
+      if (heatmapKey === 'subcontracting') return /subcontract|small business plan/i.test(t)
+      if (heatmapKey === 'technical_requirements') return /technical approach|technical requirement|capability/i.test(t)
+      return false
+    })
+
+    if (!hasCoverage) {
+      const level = parsed.risk_heatmap[heatmapKey as keyof typeof parsed.risk_heatmap]
+      if (level && level !== 'Low') {
+        // Only add findings for non-Low heatmap categories
+        const targetArray = defaultFinding.severity === 'CRITICAL' ? parsed.critical_findings
+          : defaultFinding.severity === 'HIGH' ? parsed.high_findings
+          : defaultFinding.severity === 'MEDIUM' ? parsed.medium_findings
+          : parsed.low_findings
+        targetArray.push({
+          severity: defaultFinding.severity,
+          indicator: SEVERITY_INDICATORS[defaultFinding.severity],
+          finding: defaultFinding.finding,
+          source: defaultFinding.source,
+          timeline: 'Per RFP timeline',
+          consequence: defaultFinding.consequence,
+          action: defaultFinding.action,
+        })
+      }
+    }
+  }
+
   return parsed
 }
 
@@ -939,14 +985,18 @@ const MANDATORY_SECTIONS: Array<{
   { sectionRe: /C\.?\s*2\.1|system\s*administration/i, section: 'C.2.1', description: 'System administration (workstations, servers, patch management, uptime SLAs)', priority: 'Critical' },
   { sectionRe: /C\.?\s*2\.2|help\s*desk/i, section: 'C.2.2', description: 'Help desk support (tiered support, business hours, after-hours response)', priority: 'Critical' },
   { sectionRe: /C\.?\s*2\.3|cybersecurity|nist\s*sp\s*800/i, section: 'C.2.3', description: 'Cybersecurity controls (NIST, CMMC, incident response, continuous monitoring)', priority: 'Critical' },
-  { sectionRe: /C\.?\s*2\.4|cloud\s*migration/i, section: 'C.2.4', description: 'Cloud migration support (AWS/Azure/GCP, assessment, migration, training)', priority: 'Important' },
+  { sectionRe: /C\.?\s*2\.4|cloud\s*migration/i, section: 'C.2.4', description: 'Cloud migration support (AWS/Azure/GCP, assessment, migration, training)', priority: 'Critical' },
   { sectionRe: /L\.?\s*1\.1|proposal\s*format/i, section: 'L.1.1', description: 'Proposal format and structure requirements', priority: 'Critical' },
   { sectionRe: /L\.?\s*2\.2|past\s*performance/i, section: 'L.2.2', description: 'Past performance references (minimum count, recency, documentation)', priority: 'Important' },
   { sectionRe: /L\.?\s*3\.1|security\s*clearance/i, section: 'L.3.1', description: 'Security clearance requirements for key personnel', priority: 'Critical' },
   { sectionRe: /L\.?\s*3\.2|section\s*508|rehabilitation\s*act/i, section: 'L.3.2', description: 'Section 508 accessibility compliance (Rehabilitation Act)', priority: 'Important' },
   { sectionRe: /L\.?\s*3\.3|CMMC/i, section: 'L.3.3', description: 'CMMC certification requirement and timeline', priority: 'Critical' },
   { sectionRe: /H\.?\s*[14]|contract\s*value|key\s*personnel/i, section: 'H', description: 'Key personnel requirements (roles, FTE, on-site presence)', priority: 'Important' },
+  { sectionRe: /program\s*manager|PM\s*(FT|full.?time)|onsite\s*3\s*d/i, section: 'H.4', description: 'Program Manager (full-time, on-site 3 days/week minimum)', priority: 'Critical' },
+  { sectionRe: /lead\s*(system|sys)\s*admin|system\s*administrator/i, section: 'H.4', description: 'Lead Systems Administrator (full-time, 5 years experience)', priority: 'Critical' },
+  { sectionRe: /cybersecurity\s*(specialist|analyst|lead|0\.5\s*FTE)|information\s*security/i, section: 'H.4', description: 'Cybersecurity Specialist (0.5 FTE minimum, security certifications)', priority: 'Important' },
   { sectionRe: /K\.?\s*[12]|SAM\.gov|small\s*business\s*cert/i, section: 'K', description: 'SAM.gov registration and small business certification', priority: 'Critical' },
+  { sectionRe: /FCL|facility\s*(security\s*)?clearance/i, section: 'L.3.1', description: 'Facility Clearance (FCL) — verify if required for this contract', priority: 'Important' },
 ]
 
 // Patterns that indicate a requirement is likely a false positive
@@ -982,12 +1032,16 @@ function supplementRequirements(
   }
 
   // 3. Add missing mandatory sections (only if the RFP actually mentions them)
+  //    Special case: FCL is added even if NOT in RFP, with status "Met" (not required)
   const nextId = filtered.length + 1
   let idCounter = nextId
   const supplemented = [...filtered]
 
   for (const ms of MANDATORY_SECTIONS) {
-    if (!coveredSections.has(ms.section) && ms.sectionRe.test(rfpText)) {
+    const isFCL = /facility\s*clearance|FCL/i.test(ms.description)
+    const inRFP = ms.sectionRe.test(rfpText)
+
+    if (!coveredSections.has(ms.section) && inRFP) {
       supplemented.push({
         id: `REQ-${String(idCounter++).padStart(3, '0')}`,
         section: ms.section,
@@ -995,10 +1049,27 @@ function supplementRequirements(
         priority: ms.priority,
         status: 'Missing',
       })
+    } else if (isFCL && !inRFP && !supplemented.some(r => /FCL|facility\s*clearance/i.test(r.requirement))) {
+      // P3: Add FCL as "Met" when not required by the RFP
+      supplemented.push({
+        id: `REQ-${String(idCounter++).padStart(3, '0')}`,
+        section: 'L.3.1',
+        requirement: 'Facility Clearance (FCL) — not required for this contract',
+        priority: 'Important',
+        status: 'Met',
+      })
     }
   }
 
-  // 4. Re-number all IDs sequentially
+  // 4. P1: Change "Partial" to "Missing" — without user profile,
+  //    we cannot confirm partial compliance, so "Missing" is more honest.
+  for (const req of supplemented) {
+    if (req.status === 'Partial') {
+      req.status = 'Missing'
+    }
+  }
+
+  // 5. Re-number all IDs sequentially
   supplemented.forEach((req, i) => {
     req.id = `REQ-${String(i + 1).padStart(3, '0')}`
   })
@@ -1640,6 +1711,36 @@ Return ONLY valid JSON, no markdown, no explanation.`
   // Cap confidence at 95%
   if (parsed.bidRecommendation?.confidence > 95) {
     parsed.bidRecommendation.confidence = 95
+  }
+
+  // ── P1 Legacy: Ensure every heatmap category has a risk detail ─
+  const heatmapCats = new Set((parsed.riskHeatmap || []).map(h => h.category.toLowerCase()))
+  const riskTitles = new Set((parsed.risks || []).map(r => r.title.toLowerCase()))
+  const legacyDefaultRisks: Array<{ category: string; level: string; title: string; desc: string }> = [
+    { category: 'compliance', level: 'High', title: 'FAR and Regulatory Compliance', desc: 'The proposal must address all applicable FAR clauses referenced in the solicitation. Verify compliance with SAM.gov registration, offeror representations, and any contract-specific flowdown clauses.' },
+    { category: 'proposal submission', level: 'Medium', title: 'Proposal Submission Requirements', desc: 'The RFP specifies format, page limits, and submission requirements. Ensure all volumes are complete, properly formatted, and submitted before the deadline.' },
+    { category: 'technical requirements', level: 'Medium', title: 'Technical Capability Demonstration', desc: 'The technical approach must demonstrate capability to meet all SOW requirements. Address evaluation criteria weighting and provide specific methodology details.' },
+    { category: 'timeline', level: 'Medium', title: 'Proposal Timeline and Deadline', desc: 'The submission timeline must be managed carefully. Late submissions are automatically disqualified per FAR regulations.' },
+    { category: 'past performance', level: 'Medium', title: 'Past Performance Documentation', desc: 'Compile relevant past performance references meeting the RFP requirements for recency, scope, and documentation.' },
+    { category: 'personnel', level: 'Medium', title: 'Key Personnel Qualifications', desc: 'Verify proposed personnel meet all experience, certification, and clearance requirements specified in the solicitation.' },
+    { category: 'subcontracting', level: 'Low', title: 'Subcontracting Plan Requirements', desc: 'If required, develop a comprehensive subcontracting plan with achievable goals for required small business categories.' },
+  ]
+  for (const dr of legacyDefaultRisks) {
+    if (heatmapCats.has(dr.category) && !riskTitles.has(dr.title.toLowerCase())) {
+      const hmLevel = (parsed.riskHeatmap || []).find(h => h.category.toLowerCase() === dr.category)?.level
+      if (hmLevel && hmLevel !== 'Low') {
+        parsed.risks.push({
+          level: hmLevel as 'High' | 'Medium' | 'Low' | 'Critical',
+          title: dr.title,
+          description: dr.desc,
+        })
+      }
+    }
+  }
+
+  // ── P1 Legacy: Change "Partial" to "Missing" for unknown profile ─
+  for (const req of (parsed.requirements || [])) {
+    if (req.status === 'Partial') req.status = 'Missing'
   }
 
   return parsed
