@@ -282,7 +282,7 @@ function exportToPdf(r: ApiResult) {
     s === "pass" ? "\u2705" : s === "warn" ? "\u26A0\uFE0F" : "\u274C";
 
   const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>BidRank RFP Analysis Report</title>
+<html lang="en"><head><meta charset="utf-8"><title>BidRank RFP Analysis Report</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1e293b;padding:40px;max-width:800px;margin:0 auto;font-size:14px;line-height:1.6}
@@ -339,7 +339,7 @@ function exportToPdf(r: ApiResult) {
     <div class="breakdown-item"><span>Compliance Completeness</span><span>${r.scoreBreakdown.complianceCompleteness}%</span></div>
     <div class="breakdown-item"><span>Capability Match</span><span>${r.scoreBreakdown.capabilityMatch}%</span></div>
     <div class="breakdown-item"><span>Requirement Clarity</span><span>${r.scoreBreakdown.requirementClarity}%</span></div>
-    <div class="breakdown-item"><span>Historical Patterns</span><span>${r.scoreBreakdown.historicalPatterns}%</span></div>
+    <div class="breakdown-item"><span>Historical Patterns</span><span>${r.scoreBreakdown.historicalPatterns === 0 ? 'N/A' : r.scoreBreakdown.historicalPatterns + '%'}</span></div>
   </div>
 </div>
 
@@ -358,7 +358,9 @@ ${r.complianceChecklist.length ? `<h2>Detailed Compliance Checklist</h2><table c
 
 ${r.risks.length ? `<h2>Risk Details</h2>${r.risks.map((risk: { level: string; title: string; description: string }) => `<div class="risk-item" style="border-left-color:${riskColor(risk.level)}"><div class="risk-title">${risk.level}: ${risk.title}</div><div class="risk-desc">${risk.description}</div></div>`).join("")}` : ""}
 
-${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td>${req.text.length > 200 ? req.text.slice(0, 200) + "..." : req.text}</td><td>${req.priority}</td><td>${req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
+${r.riskHeatmap.length ? `<h2>Risk Heatmap</h2><table class="req-table"><thead><tr><th>Category</th><th>Risk Level</th></tr></thead><tbody>${r.riskHeatmap.map((h: { category: string; level: string }) => `<tr><td>${h.category}</td><td style="color:${h.level === 'Critical' ? '#dc2626' : h.level === 'High' ? '#f59e0b' : h.level === 'Medium' ? '#f59e0b' : '#16a34a'};font-weight:600">${h.level}</td></tr>`).join("")}</tbody></table>` : ""}
+
+${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td style="white-space:normal;max-width:400px">${req.text}</td><td>${req.priority}</td><td>${req.status === 'Missing' ? 'Action Required' : req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
 
 ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list">${r.recommendations.map((rec: string) => `<li>${rec}</li>`).join("")}</ol>` : ""}
 
@@ -370,6 +372,8 @@ ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list
     win.document.write(html);
     win.document.close();
     win.onload = () => {
+      // Force English locale for page numbers ("1 of 5" not "1 sur 5")
+      win.document.documentElement.lang = 'en';
       win.print();
     };
   }
@@ -433,6 +437,11 @@ function PriorityBadge({ priority }: { priority: string }) {
 
 /* ── Helper: Status badge ──────────────────── */
 function StatusBadge({ status }: { status: string }) {
+  const label: Record<string, string> = {
+    Met: "Met",
+    Partial: "Partial",
+    Missing: "Action Required",
+  };
   const config: Record<string, string> = {
     Met: "bg-br-success/10 text-br-success border-br-success/30",
     Partial: "bg-br-warning/10 text-br-warning border-br-warning/30",
@@ -440,7 +449,7 @@ function StatusBadge({ status }: { status: string }) {
   };
   return (
     <Badge variant="outline" className={`text-xs font-medium ${config[status] ?? ""}`}>
-      {status}
+      {label[status] ?? status}
     </Badge>
   );
 }
@@ -775,15 +784,21 @@ export default function AnalyzerPage() {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  {Object.entries(result.scoreBreakdown).map(([key, val]) => (
+                  {Object.entries(result.scoreBreakdown).map(([key, val]) => {
+                    const isHistorical = key === 'historicalPatterns';
+                    const displayVal = isHistorical && val === 0 ? null : val;
+                    return (
                     <div key={key} className="flex items-center gap-3">
                       <span className="text-xs text-br-text-secondary w-40 shrink-0 capitalize">{key.replace(/([A-Z])/g, " $1")}</span>
                       <div className="flex-1 h-2 bg-br-light rounded-full overflow-hidden">
-                        <div className="h-full bg-br-secondary rounded-full transition-all" style={{ width: `${val}%` }} />
+                        <div className={`h-full rounded-full transition-all ${isHistorical && val === 0 ? 'bg-br-border' : 'bg-br-secondary'}`} style={{ width: `${displayVal ?? 50}%` }} />
                       </div>
-                      <span className="text-xs font-medium text-br-dark font-mono-data w-8 text-right">{val}%</span>
+                      <span className="text-xs font-medium text-br-dark font-mono-data w-12 text-right">
+                        {displayVal !== null ? `${displayVal}%` : 'N/A'}
+                      </span>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

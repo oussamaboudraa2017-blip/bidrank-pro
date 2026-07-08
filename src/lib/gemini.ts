@@ -1016,6 +1016,13 @@ export async function analyzeRFP(rfpText: string): Promise<AnalysisResult> {
 - Contract Value >$2M for 8(a)/small biz: Financial risk must be at least "Medium"
 - Set-Aside (SDVOSB, WOSB, 8(a), HUBZone): Must appear in keyMetrics
 
+## ZERO-TOLERANCE SECURITY RULE:
+If the RFP requires Security Clearance (Secret/Top Secret/TS/SCI) OR CMMC Level 2+ certification, the bidRecommendation.verdict MUST be:
+- "NO-BID" if the user has no way to confirm clearance eligibility or CMMC certification
+- "CONDITIONAL" ONLY if the reasoning explicitly states the user ALREADY holds the required clearance/certification
+- NEVER return "BID" when clearance or CMMC Level 2+ is required
+- The reasoning MUST mention the specific clearance level and timeline from the RFP
+
 ## FORBIDDEN LANGUAGE — NEVER USE:
 - "Not addressed in Section L", "Missing from requirements", "Not found in document", "Not documented"
 INSTEAD: "Section L requires [X]. Verify yours are relevant to [specific scope]."
@@ -1048,6 +1055,63 @@ Return ONLY valid JSON, no markdown, no explanation.`
   if (!parsed.risks || parsed.risks.length === 0) parsed.risks = []
   if (!parsed.complianceChecklist || parsed.complianceChecklist.length === 0) parsed.complianceChecklist = []
   if (!parsed.recommendations || parsed.recommendations.length === 0) parsed.recommendations = []
+
+  // ── Build riskHeatmap from risks if AI didn't return it ──────────
+  if (!parsed.riskHeatmap || parsed.riskHeatmap.length === 0) {
+    const riskToCategory = (title: string): string => {
+      const t = title.toLowerCase()
+      if (/clearance|security|cmmc|fcl/i.test(t)) return 'Security Clearance'
+      if (/financial|bond|cash|cost/i.test(t)) return 'Financial'
+      if (/timeline|schedule|deadline|aggressive/i.test(t)) return 'Timeline'
+      if (/past performance|reference/i.test(t)) return 'Past Performance'
+      if (/technical|requirement|scope/i.test(t)) return 'Technical Requirements'
+      if (/subcontract/i.test(t)) return 'Subcontracting'
+      if (/personnel|staff/i.test(t)) return 'Personnel'
+      if (/compliance|far|regulation/i.test(t)) return 'Compliance'
+      return 'Other'
+    }
+    const categoryLevels: Record<string, string> = {}
+    for (const r of parsed.risks) {
+      const cat = riskToCategory(r.title)
+      const current = categoryLevels[cat] || 'Low'
+      const order = ['Low', 'Medium', 'High', 'Critical']
+      const next = r.level === 'High' ? 'High' : r.level
+      if ((order.indexOf(next) ?? 0) > (order.indexOf(current) ?? 0)) {
+        categoryLevels[cat] = next
+      }
+    }
+    parsed.riskHeatmap = Object.entries(categoryLevels).map(([category, level]) => ({ category, level }))
+    // Ensure at least 8 standard categories
+    const standards = ['Security Clearance', 'Technical Requirements', 'Compliance', 'Financial', 'Timeline', 'Past Performance', 'Personnel', 'Subcontracting']
+    for (const s of standards) {
+      if (!categoryLevels[s]) {
+        parsed.riskHeatmap.push({ category: s, level: 'Low' })
+      }
+    }
+  }
+
+  // ── Zero-tolerance enforcement: security clearance / CMMC ───────
+  // If the RFP requires clearance or CMMC Level 2+, the verdict must
+  // never be "BID" — the user cannot confirm eligibility from RFP text alone.
+  const hasClearanceReq = /secret|top secret|ts\/sci|security clearance/i.test(rfpText)
+  const hasCMMCReq = /cmmc\s*level\s*[2-3]/i.test(rfpText)
+  if (hasClearanceReq || hasCMMCReq) {
+    const v = parsed.bidRecommendation?.verdict
+    if (v === 'BID') {
+      parsed.bidRecommendation.verdict = 'CONDITIONAL'
+      parsed.bidRecommendation.reasoning =
+        `ZERO-TOLERANCE OVERRIDE: This RFP requires ${hasClearanceReq ? 'security clearance' : ''}${hasClearanceReq && hasCMMCReq ? ' and ' : ''}${hasCMMCReq ? 'CMMC Level 2+ certification' : ''}. BidRank cannot confirm your eligibility — verify before proceeding. ` +
+        (parsed.bidRecommendation.reasoning || '')
+    }
+    // Ensure risks reflect the security requirement
+    if (hasClearanceReq && !parsed.risks.some(r => /clearance/i.test(r.title))) {
+      parsed.risks.unshift({
+        level: 'High',
+        title: 'Security Clearance Requirement',
+        description: 'This RFP requires security clearance for key personnel. Verify your team\'s clearance status or identify cleared subcontractors before bidding.',
+      })
+    }
+  }
 
   return parsed
 }
