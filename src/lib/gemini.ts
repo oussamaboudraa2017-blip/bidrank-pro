@@ -44,7 +44,7 @@ export interface V2Requirement {
   section: string
   requirement: string
   priority: 'Critical' | 'Important' | 'Nice-to-Have'
-  status: 'Met' | 'Action Required' | 'Missing'
+  status: 'Met' | 'Verify' | 'Action Required' | 'Missing'
 }
 
 export interface V2AnalysisResult {
@@ -108,7 +108,7 @@ export interface AnalysisResult {
     section: string
     text: string
     priority: 'Critical' | 'Important' | 'Nice-to-Have'
-    status: 'Met' | 'Action Required' | 'Missing'
+    status: 'Met' | 'Verify' | 'Action Required' | 'Missing'
   }>
   recommendations: string[]
 }
@@ -158,7 +158,7 @@ Return ONLY valid JSON matching this exact structure:
       "section": "Section L",
       "requirement": "Exact requirement text from RFP",
       "priority": "Critical" | "Important" | "Nice-to-Have",
-      "status": "Met" | "Action Required" | "Missing"
+      "status": "Met" | "Verify" | "Action Required" | "Missing"
     }
   ],
   "critical_findings": [
@@ -268,7 +268,7 @@ Additional risk factors: bonding requirements not documented, security clearance
 - You MUST extract 15-20 requirements minimum. NEVER return fewer than 12.
 - Each requirement gets a unique ID: REQ-001, REQ-002, etc.
 - Priority: "Critical" = mandatory, "Important" = evaluated, "Nice-to-Have" = optional
-- Status: "Met" = clearly addressed, "Action Required" = partially addressed or needs verification, "Missing" = not addressed
+- Status: "Met" = clearly addressed, "Verify" = likely met but user should confirm (e.g. SAM.gov, Section 508, proposal format), "Action Required" = partially addressed or needs action, "Missing" = not addressed
 - Security clearance, CMMC, FedRAMP, FCL requirements MUST appear in the extractor
 
 ### MANDATORY SECTIONS TO SCAN — never skip these:
@@ -667,6 +667,13 @@ function validateAndFix(
     }
   }
 
+  // ── P2: Enforce Cloud Migration (C.2.4) as Critical priority ──
+  for (const req of parsed.requirement_extractor) {
+    if (/C\.?\s*2\.4|cloud\s*migration/i.test(req.requirement) && req.priority !== 'Critical') {
+      req.priority = 'Critical'
+    }
+  }
+
   // ── FIX-003: Risk Heatmap ↔ Findings severity sync ────────────
   // Enforce: Security Clearance and CMMC must be "Critical" in BOTH
   // heatmap and findings. If mismatch, auto-correct to the higher severity.
@@ -929,7 +936,7 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
   const reqs: V2Requirement[] = []
   let id = 1
 
-  const addReq = (section: string, requirement: string, priority: 'Critical' | 'Important' | 'Nice-to-Have', status: 'Met' | 'Action Required' | 'Missing') => {
+  const addReq = (section: string, requirement: string, priority: 'Critical' | 'Important' | 'Nice-to-Have', status: 'Met' | 'Verify' | 'Action Required' | 'Missing') => {
     reqs.push({ id: `REQ-${String(id++).padStart(3, '0')}`, section, requirement, priority, status })
   }
 
@@ -950,8 +957,10 @@ function buildDefaultRequirements(text: string): V2Requirement[] {
     addReq('Contract', 'FedRAMP Authorization', 'Critical', 'Missing')
   }
 
-  // FCL
-  if (/\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(text)) {
+  // FCL — detect "not required" patterns
+  const fclNotRequired = /FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required/i.test(text)
+  const hasFCL = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(text)
+  if (hasFCL && !fclNotRequired) {
     addReq('Section K', 'Facility Clearance (FCL)', 'Critical', 'Missing')
   }
 
@@ -1059,8 +1068,9 @@ function supplementRequirements(
   for (const ms of MANDATORY_SECTIONS) {
     const isFCL = /facility\s*clearance|FCL/i.test(ms.description)
     const inRFP = ms.sectionRe.test(rfpText)
+    const fclExempt = isFCL && /FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required/i.test(rfpText)
 
-    if (!coveredSections.has(ms.section) && inRFP) {
+    if (!coveredSections.has(ms.section) && inRFP && !fclExempt) {
       supplemented.push({
         id: `REQ-${String(idCounter++).padStart(3, '0')}`,
         section: ms.section,
@@ -1068,8 +1078,8 @@ function supplementRequirements(
         priority: ms.priority,
         status: 'Missing',
       })
-    } else if (isFCL && !inRFP && !supplemented.some(r => /FCL|facility\s*clearance/i.test(r.requirement))) {
-      // P3: Add FCL as "Met" when not required by the RFP
+    } else if (isFCL && (!inRFP || fclExempt) && !supplemented.some(r => /FCL|facility\s*clearance/i.test(r.requirement))) {
+      // P0: Add FCL as "Met" when not required by the RFP
       supplemented.push({
         id: `REQ-${String(idCounter++).padStart(3, '0')}`,
         section: 'L.3.1',
@@ -1084,8 +1094,24 @@ function supplementRequirements(
   //    we cannot confirm partial compliance. "Action Required" is more accurate
   //    than "Missing" since the RFP section was partially detected.
   for (const req of supplemented) {
-    if (req.status === 'Partial') {
+    if ((req.status as string) === 'Partial') {
       req.status = 'Action Required'
+    }
+  }
+
+  // 4b. P2: Change "Action Required" to "Verify" for requirements that
+  //     most businesses already meet (registration, accessibility, format).
+  const verifyPatterns = [
+    /SAM\.gov|system for award management/i,
+    /section\s*508|rehabilitation act|accessibility/i,
+    /proposal\s*format|page\s*limit|volume\s*[iI]/i,
+    /small business\s*(certification|status)/i,
+  ]
+  for (const req of supplemented) {
+    if (req.status === 'Action Required' || req.status === 'Missing') {
+      if (verifyPatterns.some(p => p.test(req.requirement))) {
+        req.status = 'Verify'
+      }
     }
   }
 
@@ -1445,7 +1471,7 @@ export async function analyzeRFP(rfpText: string): Promise<AnalysisResult> {
     "actionItems": ["Specific action 1", "Specific action 2", ...]
   },
   "requirements": [
-    { "id": "REQ-001", "section": "Section L", "text": "Exact requirement", "priority": "Critical|Important|Nice-to-Have", "status": "Met|Action Required|Missing" }
+    { "id": "REQ-001", "section": "Section L", "text": "Exact requirement", "priority": "Critical|Important|Nice-to-Have", "status": "Met|Verify|Action Required|Missing" }
   ],
   "recommendations": [
     "[SEVERITY]: This [Agency] RFP requires [specific requirement] ([Section X.Y]). [Action] within [timeline]. Missing this = [consequence].",
@@ -1629,17 +1655,21 @@ Return ONLY valid JSON, no markdown, no explanation.`
     let compScore = 100
     for (const req of (parsed.requirements || [])) {
       if (req.status === 'Missing') {
-        if (req.priority === 'Critical') compScore -= 10
-        else if (req.priority === 'Important') compScore -= 5
-        else compScore -= 2
+        if (req.priority === 'Critical') compScore -= 5
+        else if (req.priority === 'Important') compScore -= 3
+        else compScore -= 1
       }
     }
-    compScore = Math.max(5, compScore)
-    // Use the LOWER of AI score vs calculated
+    compScore = Math.max(75, Math.min(100, compScore))
+    // Use the LOWER of AI score vs calculated, with floor at 75
     parsed.scoreBreakdown.complianceCompleteness = Math.min(
       parsed.scoreBreakdown.complianceCompleteness || 100,
       compScore
     )
+    // Ensure minimum 75
+    if (parsed.scoreBreakdown.complianceCompleteness < 75) {
+      parsed.scoreBreakdown.complianceCompleteness = 75
+    }
   }
 
   // ── FIX-007: Security & Certifications score floor at 30% ─────
@@ -1793,19 +1823,32 @@ Return ONLY valid JSON, no markdown, no explanation.`
 
   // ── P2 Legacy: Change "Partial" to "Missing" for unknown profile ─
   for (const req of (parsed.requirements || [])) {
-    if (req.status === 'Partial') req.status = 'Missing'
+    if ((req.status as string) === 'Partial') req.status = 'Missing'
     if (req.status === 'Action Required') req.status = 'Missing'
+    if (req.status === 'Verify') req.status = 'Met'
   }
 
-  // ── P3: Add FCL Not Required to complianceChecklist ──
-  const hasFCLReq = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
+  // ── P0: Add FCL to complianceChecklist with correct status ──
+  //    Detect "FCL is not required" patterns in RFP text
+  const hasFCLText = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
+  const fclNotRequired = /FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required/i.test(rfpText)
   const hasFCLItem = parsed.complianceChecklist.some(c => /FCL|facility\s*clearance/i.test(c.item))
-  if (!hasFCLReq && !hasFCLItem) {
-    parsed.complianceChecklist.push({
-      item: 'Facility Clearance (FCL) — not required for this contract',
-      status: 'pass',
-    })
-  } else if (hasFCLReq && !hasFCLItem) {
+  if (!hasFCLText || fclNotRequired) {
+    if (!hasFCLItem) {
+      parsed.complianceChecklist.push({
+        item: 'Facility Clearance (FCL) — not required for this contract',
+        status: 'pass',
+      })
+    } else {
+      // Fix any incorrectly flagged FCL items
+      for (const c of parsed.complianceChecklist) {
+        if (/FCL|facility\s*clearance/i.test(c.item)) {
+          c.item = 'Facility Clearance (FCL) — not required for this contract'
+          c.status = 'pass'
+        }
+      }
+    }
+  } else if (hasFCLText && !hasFCLItem) {
     parsed.complianceChecklist.push({
       item: 'Facility Clearance (FCL) — required, verify current FCL status or ability to obtain',
       status: 'fail',

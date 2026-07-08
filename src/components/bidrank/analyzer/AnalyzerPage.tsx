@@ -376,7 +376,7 @@ ${r.risks.length ? `<h2>Risk Details</h2>${r.risks.map((risk: { level: string; t
 
 ${r.riskHeatmap.length ? `<h2>Risk Heatmap</h2><table class="req-table"><thead><tr><th>Category</th><th>Risk Level</th></tr></thead><tbody>${r.riskHeatmap.map((h: { category: string; level: string }) => `<tr><td>${h.category}</td><td style="color:${h.level === 'Critical' ? '#dc2626' : h.level === 'High' ? '#f59e0b' : h.level === 'Medium' ? '#f59e0b' : '#16a34a'};font-weight:600">${h.level}</td></tr>`).join("")}</tbody></table>` : ""}
 
-${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td style="white-space:normal;max-width:400px">${req.text}</td><td>${req.priority}</td><td>${req.status === 'Missing' ? 'Action Required' : req.status === 'Partial' ? 'Action Required' : req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
+${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})</h2><table class="req-table"><thead><tr><th>Section</th><th>Requirement</th><th>Priority</th><th>Status</th></tr></thead><tbody>${r.requirements.slice(0, 50).map((req: { section: string; text: string; priority: string; status: string }) => `<tr><td>${req.section}</td><td style="white-space:normal;max-width:400px">${req.text}</td><td>${req.priority}</td><td>${req.status === 'Missing' ? 'Action Required' : req.status === 'Partial' ? 'Action Required' : req.status === 'Verify' ? 'Verify' : req.status}</td></tr>`).join("")}${r.requirements.length > 50 ? `<tr><td colspan="4" style="text-align:center;color:#64748b">... and ${r.requirements.length - 50} more requirements</td></tr>` : ""}</tbody></table>` : ""}
 
 ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list">${r.recommendations.map((rec: string) => `<li>${rec}</li>`).join("")}</ol>` : ""}
 
@@ -454,12 +454,14 @@ function PriorityBadge({ priority }: { priority: string }) {
 function StatusBadge({ status }: { status: string }) {
   const label: Record<string, string> = {
     Met: "Met",
+    Verify: "Verify",
     "Action Required": "Action Required",
     Missing: "Action Required",
     Partial: "Action Required",
   };
   const config: Record<string, string> = {
     Met: "bg-br-success/10 text-br-success border-br-success/30",
+    Verify: "bg-blue-50 text-blue-700 border-blue-200",
     "Action Required": "bg-br-warning/10 text-br-warning border-br-warning/30",
     Missing: "bg-br-error/10 text-br-error border-br-error/30",
     Partial: "bg-br-warning/10 text-br-warning border-br-warning/30",
@@ -649,7 +651,7 @@ export default function AnalyzerPage() {
   };
 
   const priorityOrder: Record<string, number> = { Critical: 0, Important: 1, "Nice-to-Have": 2 };
-  const statusOrder: Record<string, number> = { Missing: 0, "Action Required": 1, Partial: 1, Met: 2 };
+  const statusOrder: Record<string, number> = { Missing: 0, "Action Required": 1, Partial: 1, Verify: 2, Met: 3 };
 
   const filteredReqs = result.requirements
     .filter((r) => {
@@ -985,7 +987,7 @@ export default function AnalyzerPage() {
 
             {/* Expandable risk details */}
             <div className="border-t pt-4 space-y-2">
-              <p className="text-xs font-semibold text-br-dark uppercase tracking-wider mb-3">Risk Details</p>
+              <h3 className="text-sm font-bold text-br-dark uppercase tracking-wider mb-3">Risk Details</h3>
               {result.risks.map((risk, i) => (
                 <Collapsible
                   key={i}
