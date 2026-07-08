@@ -317,12 +317,17 @@ function exportToPdf(r: ApiResult) {
     body{padding:20px}
     @page{
       size:auto;
-      margin:15mm;
-      @bottom-center{
-        content:"Page " counter(page) " of " counter(pages);
-        font-size:10px;
-        color:#94a3b8;
-      }
+      margin:0;
+    }
+    .print-footer{
+      position:fixed;
+      bottom:0;left:0;right:0;
+      text-align:center;
+      font-size:10px;
+      color:#94a3b8;
+      padding:8px 20mm;
+      border-top:1px solid #e2e8f0;
+      background:#fff;
     }
   }
 </style></head><body>
@@ -376,6 +381,7 @@ ${r.requirements.length ? `<h2>Extracted Requirements (${r.requirements.length})
 ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list">${r.recommendations.map((rec: string) => `<li>${rec}</li>`).join("")}</ol>` : ""}
 
 <div class="footer">BidRank.pro — AI-Powered RFP Analysis | This report is auto-generated and should be reviewed by qualified personnel.</div>
+<div class="print-footer">BidRank RFP Analysis Report — bidrank.pro</div>
 </body></html>`;
 
   const win = window.open("", "_blank");
@@ -383,8 +389,6 @@ ${r.recommendations.length ? `<h2>Recommended Next Steps</h2><ol class="rec-list
     win.document.write(html);
     win.document.close();
     win.onload = () => {
-      // Force English locale for page numbers ("1 of 5" not "1 sur 5")
-      win.document.documentElement.lang = 'en';
       win.print();
     };
   }
