@@ -784,6 +784,9 @@ function validateAndFix(
     { keywords: ['personnel', 'staffing'], severity: 'MEDIUM', finding: 'Key personnel staffing and qualification requirements', source: 'Section H.4', action: 'Identify qualified personnel meeting all experience and clearance requirements', consequence: 'unqualified personnel result in key positions being unfilled' },
     { keywords: ['subcontracting', 'small business'], severity: 'LOW', finding: 'Small business subcontracting plan requirements', source: 'Section L.2.3 and FAR 52.219-9', action: 'Develop subcontracting plan with achievable goals for required categories', consequence: 'missing or inadequate plan results in evaluation deduction' },
     { keywords: ['technical'], severity: 'LOW', finding: 'Technical approach and capability demonstration', source: 'Section L.2.1 and C', action: 'Develop detailed technical approach addressing all SOW requirements', consequence: 'weak technical approach significantly lowers evaluation score' },
+    { keywords: ['financial'], severity: 'MEDIUM', finding: 'Financial capacity and bonding requirements', source: 'Section K and H', action: 'Verify bonding capacity and cash flow reserves meet contract value requirements', consequence: 'insufficient financial capacity results in inability to perform or bond denial' },
+    { keywords: ['cybersecurity_certifications', 'cmmc', 'fedramp'], severity: 'HIGH', finding: 'Cybersecurity certification requirements (CMMC, FedRAMP)', source: 'Section C.2.3 and K', action: 'Verify current certification status and timeline to achieve required levels', consequence: 'missing certifications result in proposal disqualification for DoD contracts' },
+    { keywords: ['security_clearance', 'clearance'], severity: 'CRITICAL', finding: 'Security clearance requirements for personnel', source: 'Section L.3.1 and H', action: 'Begin clearance verification or identify cleared subcontractors immediately', consequence: 'missing clearances result in automatic proposal disqualification' },
   ]
 
   for (const entry of heatmapKeywords) {
@@ -1106,8 +1109,22 @@ function supplementRequirements(
     }
   }
 
-  // 4b. P2: Change "Action Required" to "Verify" for requirements that
-  //     most businesses already meet (registration, accessibility, format).
+  // 4b. P2: Cap "Action Required" to max 6, then downgrade rest ──
+  const actionRequiredReqs = supplemented.filter(r => r.status === 'Action Required')
+  const MAX_ACTION_REQUIRED = 6
+  if (actionRequiredReqs.length > MAX_ACTION_REQUIRED) {
+    const priorityOrder: Record<string, number> = { Critical: 0, Important: 1, 'Nice-to-Have': 2 }
+    actionRequiredReqs.sort((a, b) => (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2))
+    const keep = new Set(actionRequiredReqs.slice(0, MAX_ACTION_REQUIRED))
+    for (const req of supplemented) {
+      if (req.status === 'Action Required' && !keep.has(req)) {
+        req.status = 'Verify'
+      }
+    }
+  }
+
+  // 4c. P2b: Also change some "Missing" to "Verify" for common items
+  //     that most businesses already meet (registration, accessibility, format).
   const verifyPatterns = [
     /SAM\.gov|system for award management/i,
     /section\s*508|rehabilitation act|accessibility/i,
@@ -1566,6 +1583,12 @@ Return ONLY valid JSON, no markdown, no explanation.`
 
   parsed.readinessScore = Math.max(0, Math.min(100, Math.round(parsed.readinessScore || 0)))
 
+  // P1: Raise readinessScore floor to 75
+  // Without user profile, a score below 75 is misleadingly pessimistic.
+  if (parsed.readinessScore < 75) {
+    parsed.readinessScore = 75
+  }
+
   // ── Fix raw ISO dates in keyMetrics ──────────────────────────────
   if (parsed.keyMetrics?.submissionDeadline) {
     const d = parsed.keyMetrics.submissionDeadline
@@ -1693,16 +1716,11 @@ Return ONLY valid JSON, no markdown, no explanation.`
         else compScore -= 1
       }
     }
-    compScore = Math.max(75, Math.min(100, compScore))
-    // Use the LOWER of AI score vs calculated, with floor at 75
-    parsed.scoreBreakdown.complianceCompleteness = Math.min(
-      parsed.scoreBreakdown.complianceCompleteness || 100,
-      compScore
-    )
-    // Ensure minimum 75
-    if (parsed.scoreBreakdown.complianceCompleteness < 75) {
-      parsed.scoreBreakdown.complianceCompleteness = 75
-    }
+    // Clamp to 75-80 range — without user profile, assume baseline compliance
+    compScore = Math.max(75, Math.min(80, compScore))
+    // Use the LOWER of AI score vs calculated, clamped to 75-80
+    const aiComp = Math.max(75, Math.min(80, parsed.scoreBreakdown.complianceCompleteness || 100))
+    parsed.scoreBreakdown.complianceCompleteness = Math.min(aiComp, compScore)
   }
 
   // ── FIX-007: Security & Certifications score: cap at 30-40% ──
