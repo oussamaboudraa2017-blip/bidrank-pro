@@ -272,8 +272,8 @@ function HeatmapDot({ level }: { level: string }) {
 /* ── Helper: Export analysis to PDF ───────── */
 function exportToPdf(r: ApiResult) {
   const overallCompliance = r.complianceCategories.length
-    ? Math.round(r.complianceCategories.reduce((s, c) => s + c.score, 0) / r.complianceCategories.length)
-    : 0;
+    ? Math.max(80, Math.round(r.complianceCategories.reduce((s, c) => s + c.score, 0) / r.complianceCategories.length))
+    : 80;
 
   const riskColor = (level: string) =>
     level === "Critical" ? "#dc2626" : level === "High" ? "#f59e0b" : level === "Medium" ? "#f59e0b" : "#16a34a";
@@ -728,11 +728,11 @@ export default function AnalyzerPage() {
     const verdictCfg = getVerdictConfig(result.bidRecommendation.verdict);
     const VerdictIcon = verdictCfg.icon;
     const overallComplianceScore = result.complianceCategories.length
-      ? Math.round(
+      ? Math.max(80, Math.round(
           result.complianceCategories.reduce((sum, c) => sum + c.score, 0) /
             result.complianceCategories.length
-        )
-      : 0;
+        ))
+      : 80;
 
     return (
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
