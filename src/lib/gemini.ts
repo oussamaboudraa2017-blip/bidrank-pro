@@ -594,9 +594,11 @@ function validateAndFix(
     if (!parsed.metadata.total_pages) {
       parsed.metadata.total_pages = parsed.metadata.pages_analyzed
     }
-    // Use the LOWER of AI score vs formula-derived score
-    const aiScore = Math.max(5, Math.min(100, Math.round(parsed.metadata.compliance_score || 50)))
+    // Use the LOWER of AI score vs formula-derived score, floored at 80
+    const aiScore = Math.max(80, Math.min(100, Math.round(parsed.metadata.compliance_score || 80)))
     parsed.metadata.compliance_score = Math.min(aiScore, calculatedScore)
+    // P1: Ensure final score is never below 80
+    parsed.metadata.compliance_score = Math.max(80, parsed.metadata.compliance_score)
   }
 
   // Fix agency if null but detectable
@@ -1583,10 +1585,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
 
   parsed.readinessScore = Math.max(0, Math.min(100, Math.round(parsed.readinessScore || 0)))
 
-  // P1: Raise readinessScore floor to 75
-  // Without user profile, a score below 75 is misleadingly pessimistic.
-  if (parsed.readinessScore < 75) {
-    parsed.readinessScore = 75
+  // P1: Floor readinessScore at 80
+  // Without user profile, a score below 80 is misleadingly pessimistic.
+  if (parsed.readinessScore < 80) {
+    parsed.readinessScore = 80
   }
 
   // ── Fix raw ISO dates in keyMetrics ──────────────────────────────
@@ -1716,10 +1718,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
         else compScore -= 1
       }
     }
-    // Clamp to 75-80 range — without user profile, assume baseline compliance
-    compScore = Math.max(75, Math.min(80, compScore))
-    // Use the LOWER of AI score vs calculated, clamped to 75-80
-    const aiComp = Math.max(75, Math.min(80, parsed.scoreBreakdown.complianceCompleteness || 100))
+    // Floor at 80 — without user profile, assume baseline compliance
+    compScore = Math.max(80, compScore)
+    // Use the LOWER of AI score vs calculated, both floored at 80
+    const aiComp = Math.max(80, parsed.scoreBreakdown.complianceCompleteness || 100)
     parsed.scoreBreakdown.complianceCompleteness = Math.min(aiComp, compScore)
   }
 
