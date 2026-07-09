@@ -380,7 +380,10 @@ export async function analyzeRFPV2(rfpText: string): Promise<V2AnalysisResult> {
   if (exception) throw new Error(exception)
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME })
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: { thinkingConfig: { thinkingBudget: 10000 } } as Record<string, unknown>,
+  })
 
   const prompt = `${V2_SYSTEM_PROMPT}
 
@@ -1471,9 +1474,12 @@ export async function analyzeRFP(rfpText: string): Promise<AnalysisResult> {
   if (!apiKey) throw new Error('GEMINI_API_KEY is not configured')
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME })
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: { thinkingConfig: { thinkingBudget: 10000 } } as Record<string, unknown>,
+  })
 
-  const prompt = `You are the BidRank.pro RFP Compliance Analysis Engine. Analyze the following government RFP and return a JSON object with this exact structure. Be thorough, specific, and honest. Never predict contract awards or guarantee outcomes.
+  const prompt = `You are the BidRank.pro RFP Compliance Analysis Engine. Carefully read and reason about the entire RFP before generating your analysis. Take time to cross-reference sections, identify dependencies between requirements, and verify consistency. Analyze the following government RFP and return a JSON object with this exact structure. Be thorough, specific, and honest. Never predict contract awards or guarantee outcomes.
 
 {
   "executiveSummary": "3-5 sentence strategic overview of the opportunity, key requirements, and strategic positioning",
