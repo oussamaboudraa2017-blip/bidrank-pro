@@ -121,7 +121,7 @@ interface ApiResult {
 const MOCK_RESULT: ApiResult = {
   executiveSummary:
     "This Department of Defense RFP for Computer Systems Design Services represents a significant opportunity for 8(a)-certified small businesses with demonstrated experience in secure cloud migration and federal IT modernization. The solicitation requires Secret-level clearance for key personnel and emphasizes technical approach (40% weight) over price. The 30-day submission timeline is aggressive but manageable for firms with existing proposal infrastructure.",
-  readinessScore: 72,
+  readinessScore: 80,
   scoreBreakdown: {
     complianceCompleteness: 85,
     capabilityMatch: 68,
@@ -145,13 +145,14 @@ const MOCK_RESULT: ApiResult = {
     { item: "Pricing Structure Incomplete — missing indirect rates", status: "warn" },
     { item: "Key Personnel Resumes Included", status: "pass" },
     { item: "Bonding Capacity Not Documented", status: "fail" },
+    { item: "Facility Clearance (FCL) — not required for this contract", status: "pass" },
   ],
   complianceCategories: [
-    { name: "FAR Clauses", score: 82 },
+    { name: "FAR Clauses", score: 85 },
     { name: "Set-Aside Eligibility", score: 95 },
-    { name: "Past Performance", score: 60 },
-    { name: "Financial Requirements", score: 45 },
-    { name: "Security Requirements", score: 30 },
+    { name: "Past Performance", score: 72 },
+    { name: "Financial Requirements", score: 68 },
+    { name: "Security Requirements", score: 38 },
   ],
   risks: [
     { level: "High", title: "Narrow Technical Requirements", description: "The RFP specifies proprietary technology stack requirements that may limit the pool of qualified bidders but also raise barriers for small businesses without prior experience in this specific system." },
