@@ -1542,11 +1542,17 @@ The SAME item must have the SAME severity in risks[] and riskHeatmap[]:
 - If mismatch, always use the HIGHER severity
 
 ## BID/NO-BID LOGIC:
-- If RFP requires Security Clearance AND CMMC Level 2+ but both have achievable timelines (e.g., 60 days / 180 days) → verdict = "CONDITIONAL" (NOT "NO-BID")
-- "CONDITIONAL" = requirements are achievable but need verification
-- "NO-BID" = only for HARD BLOCKERS (impossible timelines, conflicting requirements, out-of-scope NAICS)
-- For CONDITIONAL with clearance+CMMC: confidence should be 65-80%
+- "NO-BID" = when RFP has 1+ IMMEDIATE MANDATORY requirement (required "at time of proposal submission" with NO exceptions):
+  - TS/SCI clearance at submission
+  - CMMC Level 3 at submission
+  - FedRAMP HIGH at submission
+  - FCL at submission
+  These CANNOT be obtained after award — must already be possessed.
+  If immediate_mandatory >= 1 → verdict = "NO-BID", confidence = min(85 + immediate_mandatory * 3, 95)
+- "CONDITIONAL" = requirements are achievable within stated timelines (e.g., 60 days / 180 days)
+- "BID" = no significant barriers, standard requirements
 - NEVER return "BID" when clearance or CMMC Level 2+ is required
+- For CONDITIONAL with clearance+CMMC: confidence should be 65-80%
 
 ## AGENCY NAME CONSISTENCY:
 - If RFP mentions both "GSA" and "DHS"/"CISA": use "DHS CISA (GSA Contracting)" as the agency
@@ -1591,10 +1597,132 @@ Return ONLY valid JSON, no markdown, no explanation.`
 
   parsed.readinessScore = Math.max(0, Math.min(100, Math.round(parsed.readinessScore || 0)))
 
-  // P1: Floor readinessScore at 80
-  // Without user profile, a score below 80 is misleadingly pessimistic.
-  if (parsed.readinessScore < 80) {
-    parsed.readinessScore = 80
+  // ═══════════════════════════════════════════════════════════════════
+  // v5.0 POST-PROCESSING — Difficulty-aware scoring and verdicts
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── Step 1: Calculate RFP difficulty score ────────────────────
+  let difficulty = 0
+  const hasTSSCI = /\bTS\/SCI\b|Top Secret[\s\/].*Sensitive[\s\/]?Compartmented/i.test(rfpText)
+  const hasTopSecret = /\bTop Secret\b/i.test(rfpText)
+  const hasCMMCL3 = /\bCMMC\s*Level\s*3\b/i.test(rfpText)
+  const hasCMMCL2 = /\bCMMC\s*Level\s*2\b/i.test(rfpText)
+  const hasFedRAMPHIGH = /\bFedRAMP\s*HIGH\b/i.test(rfpText)
+  const hasFedRAMPModerate = /\bFedRAMP\s*Moderate\b/i.test(rfpText)
+  const hasFCLRequired = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText) &&
+    !/FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required/i.test(rfpText)
+  const atSubmission = /at\s*time\s*of\s*(proposal\s*)?submiss/i.test(rfpText)
+  const contractValue = parsed.keyMetrics?.contractValue || ''
+  const valueNum = parseFloat((contractValue || '').replace(/[^0-9.]/g, '')) || 0
+
+  if (hasTSSCI) difficulty += 3
+  if (hasTopSecret && !hasTSSCI) difficulty += 2
+  if (hasCMMCL3) difficulty += 3
+  if (hasCMMCL2) difficulty += 2
+  if (hasFedRAMPHIGH) difficulty += 3
+  if (hasFedRAMPModerate) difficulty += 1
+  if (hasFCLRequired) difficulty += 2
+  if (atSubmission) difficulty += 3
+  if (valueNum > 25_000_000) difficulty += 2
+  else if (valueNum > 10_000_000) difficulty += 1
+
+  // Difficulty tier determines score caps
+  const isHighDifficulty = difficulty >= 10  // FBI-level: TS/SCI + CMMC L3 + FedRAMP HIGH + FCL
+  const isMediumDifficulty = difficulty >= 6 && !isHighDifficulty  // DHS/CISA-level
+
+  // ── Step 2: FIX-003 — Stop assuming "Met" for unknown profile ─
+  //    Without user profile, only basic registrations can be "Met".
+  //    Everything else must be "Action Required" or "Missing".
+  const basicMetPatterns = [
+    /SAM\.gov|system for award management/i,
+    /small business (size )?(standard|certification|registration)/i,
+    /NAICS/i,
+    /DUNS|UEI/i,
+  ]
+  const alwaysActionPatterns = [
+    /TS\/SCI|Top Secret/i,
+    /CMMC/i,
+    /FedRAMP/i,
+    /FCL|facility clearance/i,
+    /past performance/i,
+    /proposal format|page limit/i,
+    /technical approach/i,
+    /cloud migration/i,
+    /subcontract/i,
+    /bonding/i,
+    /key personnel|resume/i,
+    /quality assurance/i,
+  ]
+
+  for (const req of (parsed.requirements || [])) {
+    const t = req.text
+    const isBasic = basicMetPatterns.some(p => p.test(t))
+    const isAlwaysAction = alwaysActionPatterns.some(p => p.test(t))
+
+    if (isBasic) {
+      // Basic registrations stay "Met" — they're table stakes
+      if (req.status === 'Missing') req.status = 'Met'
+    } else if (req.status === 'Met' || req.status === 'Verify') {
+      // Everything non-basic that AI marked "Met" or "Verify" → "Action Required"
+      req.status = 'Action Required'
+    }
+    // "Missing" stays "Missing", "Action Required" stays "Action Required"
+    // "Partial" → "Action Required"
+    if ((req.status as string) === 'Partial') req.status = 'Action Required'
+  }
+
+  // ── Step 3: FIX-004 — Compliance score with weighted deductions ─
+  //    Immediate mandatory requirements get heavier penalties.
+  if (parsed.scoreBreakdown) {
+    let compScore = 100
+    for (const req of (parsed.requirements || [])) {
+      const isImmediate = atSubmission && /TS\/SCI|Top Secret|CMMC|FedRAMP|FCL|facility clearance/i.test(req.text)
+      if (req.status === 'Missing' || req.status === 'Action Required') {
+        if (req.priority === 'Critical') {
+          compScore -= isImmediate ? 15 : 10
+        } else if (req.priority === 'Important') {
+          compScore -= isImmediate ? 10 : 5
+        } else {
+          compScore -= 2
+        }
+      }
+    }
+    // Floor depends on difficulty tier
+    const compFloor = isHighDifficulty ? 0 : isMediumDifficulty ? 60 : 80
+    compScore = Math.max(compFloor, compScore)
+    // Use the LOWER of AI score vs calculated
+    const aiComp = Math.max(compFloor, parsed.scoreBreakdown.complianceCompleteness || 100)
+    parsed.scoreBreakdown.complianceCompleteness = Math.min(aiComp, compScore)
+  }
+
+  // ── Step 4: FIX-005 — Cap scores by difficulty tier ─────────
+  //    High-difficulty RFPs must reflect true barriers.
+  if (isHighDifficulty) {
+    // Bid Readiness: cap at 40
+    parsed.readinessScore = Math.min(parsed.readinessScore, 40)
+    // Security & Certifications: 15-20%
+    if (parsed.complianceCategories) {
+      const secCat = parsed.complianceCategories.find(c => /security|certification/i.test(c.name))
+      if (secCat) secCat.score = Math.max(15, Math.min(20, secCat.score))
+    }
+  } else if (isMediumDifficulty) {
+    // Bid Readiness: cap at 75
+    parsed.readinessScore = Math.min(parsed.readinessScore, 75)
+    // Security & Certifications: 30-40%
+    if (parsed.complianceCategories) {
+      const secCat = parsed.complianceCategories.find(c => /security|certification/i.test(c.name))
+      if (secCat) secCat.score = Math.max(30, Math.min(40, secCat.score))
+    }
+  } else {
+    // Standard RFPs: floor at 80, no cap
+    if (parsed.readinessScore < 80) parsed.readinessScore = 80
+    // Security & Certifications: standard range
+    if (parsed.complianceCategories) {
+      const secCat = parsed.complianceCategories.find(c => /security|certification/i.test(c.name))
+      if (secCat && (hasClearanceReq || hasCMMCReq)) {
+        secCat.score = Math.max(30, Math.min(40, secCat.score))
+      }
+    }
   }
 
   // ── Fix raw ISO dates in keyMetrics ──────────────────────────────
@@ -1714,34 +1842,9 @@ Return ONLY valid JSON, no markdown, no explanation.`
     }
   }
 
-  // ── FIX-006: Recalculate complianceCompleteness from requirements ──
-  if (parsed.scoreBreakdown) {
-    let compScore = 100
-    for (const req of (parsed.requirements || [])) {
-      if (req.status === 'Missing') {
-        if (req.priority === 'Critical') compScore -= 5
-        else if (req.priority === 'Important') compScore -= 3
-        else compScore -= 1
-      }
-    }
-    // Floor at 80 — without user profile, assume baseline compliance
-    compScore = Math.max(80, compScore)
-    // Use the LOWER of AI score vs calculated, both floored at 80
-    const aiComp = Math.max(80, parsed.scoreBreakdown.complianceCompleteness || 100)
-    parsed.scoreBreakdown.complianceCompleteness = Math.min(aiComp, compScore)
-  }
+  // ── FIX-006: Recalculate complianceCompleteness (now handled in Step 3) ──
 
-  // ── FIX-007: Security & Certifications score: cap at 30-40% ──
-  //    When user profile is unknown, we can't confirm security posture.
-  //    Floor at 30%, ceiling at 40% — never let AI over-report this.
-  if (parsed.complianceCategories) {
-    const secCat = parsed.complianceCategories.find(c =>
-      /security|certification/i.test(c.name)
-    )
-    if (secCat && (hasClearanceReq || hasCMMCReq)) {
-      secCat.score = Math.max(30, Math.min(40, secCat.score))
-    }
-  }
+  // ── FIX-007: Security & Certifications score (now handled in Step 4) ──
 
   // ── FIX-002: Agency name consistency ───────────────────────────
   // Normalize agency in keyMetrics per v4.0 spec
@@ -1827,22 +1930,35 @@ Return ONLY valid JSON, no markdown, no explanation.`
     parsed.recommendations = rebuilt.slice(0, 5)
   }
 
-  // ── FIX-005: Zero-tolerance + CONDITIONAL enforcement ──────────
-  if (hasClearanceReq || hasCMMCReq) {
+  // ── FIX-001: Bid/No-Bid — NO-BID for immediate mandatory requirements ──
+  //    Count requirements that are mandatory "at time of proposal submission"
+  const immediateMandatoryItems: string[] = []
+  if (atSubmission) {
+    if (hasTSSCI || hasTopSecret) immediateMandatoryItems.push('TS/SCI clearance')
+    if (hasCMMCL3) immediateMandatoryItems.push('CMMC Level 3')
+    if (hasFedRAMPHIGH) immediateMandatoryItems.push('FedRAMP HIGH')
+    if (hasFCLRequired) immediateMandatoryItems.push('FCL')
+  }
+
+  if (immediateMandatoryItems.length >= 1) {
+    // At least one requirement must be possessed at submission — NO-BID
+    const confidence = Math.min(85 + immediateMandatoryItems.length * 3, 95)
+    parsed.bidRecommendation = parsed.bidRecommendation || { verdict: 'NO-BID', confidence, reasoning: '', actionItems: [] }
+    parsed.bidRecommendation.verdict = 'NO-BID'
+    parsed.bidRecommendation.confidence = confidence
+    parsed.bidRecommendation.reasoning =
+      `This RFP requires ${immediateMandatoryItems.join(', ')} at time of proposal submission with no exceptions. ` +
+      `These cannot be obtained after award — they must already be possessed. ` +
+      `Unless your organization currently holds all of these, do not bid. ` +
+      (parsed.bidRecommendation.reasoning || '')
+  } else if (hasClearanceReq || hasCMMCReq) {
+    // Security/CMMC required but with achievable timelines → CONDITIONAL
     const v = parsed.bidRecommendation?.verdict
     if (v === 'BID') {
       parsed.bidRecommendation.verdict = 'CONDITIONAL'
       parsed.bidRecommendation.reasoning =
         `This RFP requires ${hasClearanceReq ? 'security clearance' : ''}${hasClearanceReq && hasCMMCReq ? ' and ' : ''}${hasCMMCReq ? 'CMMC Level 2+ certification' : ''}. These are achievable within the stated timelines but require verification. ` +
         (parsed.bidRecommendation.reasoning || '')
-    }
-    // Ensure risks reflect the security requirement
-    if (hasClearanceReq && !parsed.risks.some(r => /clearance/i.test(r.title))) {
-      parsed.risks.unshift({
-        level: 'High' as const,
-        title: 'Security Clearance Requirement',
-        description: 'This RFP requires security clearance for key personnel. Verify your team\'s clearance status or identify cleared subcontractors before bidding.',
-      })
     }
   }
 
@@ -1851,7 +1967,7 @@ Return ONLY valid JSON, no markdown, no explanation.`
     parsed.bidRecommendation.confidence = 95
   }
 
-  // ── P1 Legacy: Ensure every heatmap category has a risk detail ─
+  // ── FIX-006b: Ensure every heatmap category has a risk detail ─
   // Use keyword-based matching since AI-generated category names vary
   const riskTitles = new Set((parsed.risks || []).map(r => r.title.toLowerCase()))
   const legacyDefaultRisks: Array<{ keywords: string[]; title: string; desc: string }> = [
@@ -1891,20 +2007,11 @@ Return ONLY valid JSON, no markdown, no explanation.`
     })
   }
 
-  // ── P2 Legacy: Change "Partial" to "Missing" for unknown profile ─
-  for (const req of (parsed.requirements || [])) {
-    if ((req.status as string) === 'Partial') req.status = 'Missing'
-    if (req.status === 'Action Required') req.status = 'Missing'
-    if (req.status === 'Verify') req.status = 'Met'
-  }
-
-  // ── P0: Add FCL to complianceChecklist with correct status ──
-  //    Detect "FCL is not required" patterns in RFP text
-   const hasFCLText = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
+  // ── FIX-002: FCL status — detect "at submission" context ──
+  const hasFCLText = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
   const fclNotRequired = /FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required|FCL\s*(?:is\s*)?(?:not\s*needed|does\s*not\s*apply|not\s*a\s*requirement)|facility\s*clearance\s*(?:is\s*)?(?:not\s*needed|does\s*not\s*apply)/i.test(rfpText)
   const hasFCLItem = parsed.complianceChecklist.some(c => /FCL|facility\s*clearance/i.test(c.item))
 
-  // Ensure exactly one FCL entry with the correct status
   // Remove any AI-generated FCL entries first, then add the canonical one
   if (hasFCLItem) {
     parsed.complianceChecklist = parsed.complianceChecklist.filter(c => !/FCL|facility\s*clearance/i.test(c.item))
@@ -1915,8 +2022,13 @@ Return ONLY valid JSON, no markdown, no explanation.`
       item: 'Facility Clearance (FCL) — not required for this contract',
       status: 'pass',
     })
+  } else if (atSubmission || /at\s*time\s*of\s*(proposal\s*)?submiss/i.test(rfpText)) {
+    // FCL required AT submission — immediate mandatory
+    parsed.complianceChecklist.push({
+      item: 'Facility Clearance (FCL) — MANDATORY AT SUBMISSION. Must possess active FCL at time of proposal submission. No exceptions. Automatic disqualification if missing.',
+      status: 'fail',
+    })
   } else {
-    // FCL IS required by the RFP
     parsed.complianceChecklist.push({
       item: 'Facility Clearance (FCL) — required, verify current FCL status or ability to obtain',
       status: 'fail',
