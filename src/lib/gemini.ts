@@ -1655,6 +1655,10 @@ The SAME item must have the SAME severity in risks[] and riskHeatmap[]:
 - If RFP requires Security Clearance AND CMMC Level 2+ but both have achievable timelines (e.g., 60 days / 180 days) → verdict = "CONDITIONAL" (NOT "NO-BID")
 - "CONDITIONAL" = requirements are achievable but need verification
 - "NO-BID" = only for HARD BLOCKERS (impossible timelines, conflicting requirements, out-of-scope NAICS, immediate mandatory requirements)
+<<<<<<< Updated upstream
+=======
+- For CONDITIONAL with clearance+CMMC: confidence should be 65-80%
+>>>>>>> Stashed changes
 - NEVER return "BID" when clearance or CMMC Level 2+ is required
 - For CONDITIONAL with clearance+CMMC: confidence should be 65-80%
 
@@ -1704,8 +1708,15 @@ Return ONLY valid JSON, no markdown, no explanation.`
   // ── FIX-004/005: Difficulty-based readiness score ──────────────
   const diff = calculateDifficulty(rfpText, parseDollarValue(detectContractValue(rfpText)))
   if (diff.tier === 'fbi') {
+<<<<<<< Updated upstream
     parsed.readinessScore = Math.min(diff.bid_readiness_max, parsed.readinessScore)
   } else {
+=======
+    // FBI-level: cap at bid_readiness_max (35-40/100 for NO-BID)
+    parsed.readinessScore = Math.min(diff.bid_readiness_max, parsed.readinessScore)
+  } else {
+    // For lower difficulty tiers, floor at 60 (not 80)
+>>>>>>> Stashed changes
     parsed.readinessScore = Math.max(60, parsed.readinessScore)
   }
 
@@ -1829,6 +1840,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
   // ── FIX-006: Recalculate complianceCompleteness from requirements ──
   if (parsed.scoreBreakdown) {
     let compScore = 100
+<<<<<<< Updated upstream
+=======
+    // Apply heavier penalty for immediate mandatory Critical items
+>>>>>>> Stashed changes
     const immCount = countImmediateMandatory(rfpText)
     compScore -= immCount * 10
     for (const req of (parsed.requirements || [])) {
@@ -1838,6 +1853,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
         else compScore -= 1
       }
     }
+<<<<<<< Updated upstream
+=======
+    // Apply difficulty-based target (no floor at 80 for high difficulty)
+>>>>>>> Stashed changes
     if (diff.tier === 'fbi') {
       compScore = Math.max(5, Math.min(diff.compliance_target, compScore))
     } else {
@@ -1952,6 +1971,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
   const immMandatoryCount = countImmediateMandatory(rfpText)
   const immItems = checkImmediateMandatoryItems(rfpText)
 
+<<<<<<< Updated upstream
+=======
+  // Ensure bidRecommendation exists
+>>>>>>> Stashed changes
   if (!parsed.bidRecommendation) {
     parsed.bidRecommendation = {
       verdict: 'NEEDS REVIEW',
@@ -1969,6 +1992,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
     parsed.bidRecommendation.confidence = 85
     parsed.bidRecommendation.reasoning = `Immediate mandatory requirement: ${immItems.join(', ')} must be possessed at time of proposal submission. Unless already held, proposal will be rejected.`
   } else {
+<<<<<<< Updated upstream
+=======
+    // Standard CONDITIONAL logic for achievable-with-time requirements
+>>>>>>> Stashed changes
     if (hasClearanceReq || hasCMMCReq) {
       if (parsed.bidRecommendation.verdict === 'BID') {
         parsed.bidRecommendation.verdict = 'CONDITIONAL'
@@ -2056,6 +2083,10 @@ Return ONLY valid JSON, no markdown, no explanation.`
   }
 
   // ── FIX-002: FCL status — detect "at submission" patterns ──────
+<<<<<<< Updated upstream
+=======
+  //    Detect "FCL is not required" patterns in RFP text
+>>>>>>> Stashed changes
    const hasFCLText = /\b(FCL|Facility\s*(Security\s*)?Clearance)\b/i.test(rfpText)
   const fclNotRequired = /FCL\s*(?:is\s*)?not\s*required|no\s*(?:FCL|facility\s*(security\s*)?clearance)\s*(?:is\s*)?(?:required|needed)|facility\s*clearance\s*(?:is\s*)?not\s*required|FCL\s*(?:is\s*)?(?:not\s*needed|does\s*not\s*apply|not\s*a\s*requirement)|facility\s*clearance\s*(?:is\s*)?(?:not\s*needed|does\s*not\s*apply)/i.test(rfpText)
   const hasFCLItem = parsed.complianceChecklist.some(c => /FCL|facility\s*clearance/i.test(c.item))
@@ -2070,11 +2101,19 @@ Return ONLY valid JSON, no markdown, no explanation.`
       status: 'pass',
     })
   } else if (hasImmediateMandatory(rfpText) && hasFCLText) {
+<<<<<<< Updated upstream
+=======
+    // FCL required "at time of proposal submission"
+>>>>>>> Stashed changes
     parsed.complianceChecklist.push({
       item: 'Facility Clearance (FCL) — MANDATORY AT SUBMISSION. Must possess active FCL at time of proposal submission. No exceptions. Automatic disqualification if missing.',
       status: 'fail',
     })
   } else {
+<<<<<<< Updated upstream
+=======
+    // FCL IS required by the RFP but not immediate
+>>>>>>> Stashed changes
     parsed.complianceChecklist.push({
       item: 'Facility Clearance (FCL) — required, verify current FCL status or ability to obtain',
       status: 'fail',
